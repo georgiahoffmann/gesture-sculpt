@@ -271,6 +271,25 @@ export class StrokeDeformer {
     };
   }
 
+  /**
+   * PUSH (recorded "voltar o pinch para dentro da forma"): a closed curled
+   * pinch moving toward the object pushes the vertices under it back INTO
+   * the form, along the inverse surface normal, with the panel's brush
+   * radius. Needs beginStroke/endStroke around it like any stroke, so the
+   * whole push is one undo step.
+   */
+  updatePush(hitPoint: THREE.Vector3, hitNormal: THREE.Vector3, amount: number, brush: BrushSettings): StrokeUpdateResult {
+    const cfg = INTERACTION_CONFIG.sculpt;
+    const position = this.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const falloff = lerp(cfg.hardnessMinFalloff, cfg.hardnessMaxFalloff, brush.hardness);
+    const influence = computeBrushInfluence(position, hitPoint, brush.radius, falloff, this.influenceScratch);
+    this.lastInfluence = influence;
+    if (influence.length === 0 || amount <= 0) return { ...IDLE_RESULT, effectiveRadius: brush.radius };
+    const displacement = scratchDepth.copy(hitNormal).normalize().multiplyScalar(-amount * brush.strength);
+    this.deformer.applyDisplacement(influence, displacement, cfg.maxVertexDisplacement);
+    return { ...IDLE_RESULT, displaced: true, effectiveRadius: brush.radius, activeVertexCount: influence.length };
+  }
+
   getLastInfluence(): BrushInfluence[] {
     return this.lastInfluence;
   }

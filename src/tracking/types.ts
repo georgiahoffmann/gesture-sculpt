@@ -1,4 +1,4 @@
-import type { BladePose } from './landmarkUtils';
+import type { HandPose } from './landmarkUtils';
 
 /**
  * Our own normalized hand representation, decoupled from MediaPipe's wire format.
@@ -40,8 +40,16 @@ export interface HandState {
   pointing: boolean;
   /** Wrist->middle-knuckle vector is more horizontal than vertical in image space — the WIDTH zone's trigger (Phase 4), see landmarkUtils.isHandHorizontal. */
   isHorizontal: boolean;
-  /** Raw per-frame blade pose (flat hand, fingers together) — debounced by gestures/bladeDetector.ts before anything acts on it. */
-  bladePose: BladePose;
+  /** Raw per-frame hand pose (landmarkUtils.handPoseOf) — debounced by gestures/handPoseDetector.ts before anything acts on it. */
+  pose: HandPose;
+  /** Four fingers extended and together, any orientation — the two-hand ROUND gesture's per-hand condition. */
+  flat: boolean;
+  /** Knuckle->tip elevation in image space, radians: 0 sideways, +π/2 up. The round-corners arc is this rising ~90°. */
+  fingerElevation: number;
+  /** Palm tilt around the finger axis, radians (sign flips with handedness). The view-tilt gesture is this rocking. */
+  palmPitch: number;
+  /** Thumb-tip-to-index-tip / knuckle width (3D). The zoom gesture opens and closes this. */
+  thumbIndexGap: number;
   /** Index + thumb tips hang below the knuckles — the "pull from above" HEIGHT pose, see landmarkUtils.isPointingDown. */
   pointingDown: boolean;
 }

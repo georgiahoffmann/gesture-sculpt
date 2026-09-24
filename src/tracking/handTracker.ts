@@ -1,7 +1,7 @@
 import type { HandLandmarker } from '@mediapipe/tasks-vision';
 import { createHandLandmarker } from './mediapipe';
 import { HandSmoothing } from './handSmoothing';
-import { LM, distance2D, isFingerExtended, clamp01, palmCenterOf, handSpanOf, handWidthOf, gripDistanceOf, isHandHorizontal, bladePoseOf, isPointingDown } from './landmarkUtils';
+import { LM, distance2D, isFingerExtended, clamp01, palmCenterOf, handSpanOf, handWidthOf, gripDistanceOf, isHandHorizontal, handPoseOf, isPointingDown, isFlatHand, fingerElevationOf, palmPitchOf, thumbIndexGapOf } from './landmarkUtils';
 import type { HandState, Handedness, Point3D } from './types';
 import { INTERACTION_CONFIG } from '../config/interactionConfig';
 
@@ -20,6 +20,8 @@ export class HandTracker {
   private smoothing = new HandSmoothing(INTERACTION_CONFIG.smoothing.landmarkFactor);
   private lastVideoTime = -1;
   private latestStates: HandState[] = [];
+  /** Last frame's single hand, for keeping its label stable (see update). */
+  private lastSingle: { handedness: Handedness; x: number; y: number; atMs: number } | null = null;
 
   status: TrackingStatus = 'idle';
 
@@ -80,13 +82,38 @@ export class HandTracker {
     const states: HandState[] = [];
     const count = Math.min(result.landmarks.length, result.handedness.length);
 
+    // MediaPipe sometimes labels BOTH hands the same (seen in the two-hand reference video).
+    // Smoothing and per-hand state are keyed by handedness, so two same-labelled hands would
+    // be blended into one — relabel by image position instead (the right hand sits at the
+    // smaller raw x, as in the correctly-labelled frames).
+    const labels = Array.from({ length: count }, (_, i) => result.handedness[i][0]?.categoryName as Handedness | undefined);
+    if (count === 2 && labels[0] && labels[0] === labels[1]) {
+      const rightFirst = result.landmarks[0][0].x < result.landmarks[1][0].x;
+      labels[0] = rightFirst ? 'Right' : 'Left';
+      labels[1] = rightFirst ? 'Left' : 'Right';
+    }
+    // With only one hand in view, MediaPipe can flip its label mid-gesture (seen during the fast cut
+    // sweep in the reference video) — which would hand the gesture to the other pointer halfway
+    // through. A lone hand near where the lone hand just was keeps that hand's label.
+    if (count === 1 && labels[0]) {
+      const wrist = result.landmarks[0][0];
+      const prev = this.lastSingle;
+      if (prev && prev.handedness !== labels[0] && nowMs - prev.atMs < INTERACTION_CONFIG.tracking.labelHoldMs && Math.hypot(wrist.x - prev.x, wrist.y - prev.y) < INTERACTION_CONFIG.tracking.labelHoldDistance) {
+        labels[0] = prev.handedness;
+      }
+      this.lastSingle = { handedness: labels[0], x: wrist.x, y: wrist.y, atMs: nowMs };
+    } else if (count >= 2) {
+      // Frames with NO hand (the dropout itself) keep the memory; only a second hand clears it.
+      this.lastSingle = null;
+    }
+
     for (let i = 0; i < count; i++) {
       const category = result.handedness[i][0];
       if (!category) continue;
       const confidence = category.score;
       if (confidence < INTERACTION_CONFIG.tracking.minConfidence) continue;
 
-      const handedness = category.categoryName as Handedness;
+      const handedness = labels[i] as Handedness;
       const raw: Point3D[] = result.landmarks[i].map((p) => ({ x: p.x, y: p.y, z: p.z }));
       const landmarks = this.smoothing.smooth(handedness, raw);
       states.push(buildHandState(handedness, confidence, landmarks));
@@ -97,7 +124,7 @@ export class HandTracker {
   }
 }
 
-function buildHandState(handedness: Handedness, confidence: number, landmarks: Point3D[]): HandState {
+export function buildHandState(handedness: Handedness, confidence: number, landmarks: Point3D[]): HandState {
   const thumbTip = landmarks[LM.THUMB_TIP];
   const indexTip = landmarks[LM.INDEX_TIP];
   const wrist = landmarks[LM.WRIST];
@@ -110,7 +137,9 @@ function buildHandState(handedness: Handedness, confidence: number, landmarks: P
   const gripNormalized = gripDistanceOf(landmarks) / handWidth;
   const pointing = isFingerExtended(landmarks, LM.INDEX_TIP, LM.INDEX_PIP);
   const isHorizontal = isHandHorizontal(landmarks);
-  const bladePose = bladePoseOf(landmarks, INTERACTION_CONFIG.blade);
+  const poseCfg = INTERACTION_CONFIG.blade;
+  const pose = handPoseOf(landmarks, poseCfg);
+  const flat = isFlatHand(landmarks, INTERACTION_CONFIG.round.flatExtendRatio, INTERACTION_CONFIG.round.flatTogetherRatio);
   const pointingDown = isPointingDown(landmarks);
 
   return {
@@ -129,7 +158,11 @@ function buildHandState(handedness: Handedness, confidence: number, landmarks: P
     gripNormalized,
     pointing,
     isHorizontal,
-    bladePose,
+    pose,
     pointingDown,
+    flat,
+    fingerElevation: fingerElevationOf(landmarks),
+    palmPitch: palmPitchOf(landmarks),
+    thumbIndexGap: thumbIndexGapOf(landmarks),
   };
 }
