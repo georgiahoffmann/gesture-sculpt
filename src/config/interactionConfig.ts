@@ -69,20 +69,14 @@ export const INTERACTION_CONFIG = {
   geometry: {
     /** Segments per axis on the sculptable box at startup. Locked once the first stroke is applied — see UI note. */
     defaultSubdivisions: 16,
-    minSubdivisions: 8,
-    maxSubdivisions: 40,
   },
 
   sculpt: {
     /** World-space radius of influence around the touched surface point. */
     brushRadius: 0.35,
-    minBrushRadius: 0.08,
-    maxBrushRadius: 0.9,
 
     /** Overall multiplier on displacement magnitude. */
     brushStrength: 1,
-    minBrushStrength: 0.2,
-    maxBrushStrength: 3,
 
     /**
      * HARDNESS (0 soft .. 1 hard) is the user-facing control — it's what the
@@ -140,8 +134,6 @@ export const INTERACTION_CONFIG = {
   edit: {
     /** MOVE proportional falloff radius (world units) — 0 disables it and reproduces the pre-Phase-3 exact-selection-only behavior. */
     falloffRadius: 0,
-    minFalloffRadius: 0,
-    maxFalloffRadius: 0.6,
     falloffExponent: 2,
 
     /** MediaPipe Z depth motion -> displacement along the selection's normal (MOVE's normal component, and EXTRUDE's push distance). */
@@ -334,8 +326,6 @@ export const INTERACTION_CONFIG = {
     deadZone: 0.01,
     /** How close (NDC units) the cursor must be to the object's projected top point to count as the height zone. */
     topZoneRadius: 0.18,
-    minHeightFraction: 0.35,
-    maxHeightFraction: 2.5,
   },
 
   /**
@@ -357,11 +347,6 @@ export const INTERACTION_CONFIG = {
      * in normalized screen space (1 = the viewport edge) — the whole form must stay visible.
      */
     maxExtentNdc: 0.9,
-  },
-
-  trackingLost: {
-    /** A pointer with no hand data for longer than this is considered lost (kept short — freezing immediately is the point). */
-    timeoutMs: 60,
   },
 
   cooldown: {
