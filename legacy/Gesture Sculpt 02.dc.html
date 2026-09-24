@@ -1,0 +1,1168 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js" crossorigin="anonymous"></script>
+<style>
+  html,body{margin:0;padding:0;background:#eef0f2;color:#1a1a1a;font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;-webkit-font-smoothing:antialiased}
+  a{color:#1a1a1a}a:hover{color:#5b5b5b}
+  input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;height:14px}
+  input[type=range]::-webkit-slider-runnable-track{height:1px;background:#c4c9ce}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:7px;height:12px;background:#1a1a1a;border:0;border-radius:0;margin-top:-6px}
+  input[type=range]::-moz-range-track{height:1px;background:#c4c9ce}
+  input[type=range]::-moz-range-thumb{width:7px;height:12px;background:#1a1a1a;border:0;border-radius:0}
+  ::selection{background:#1a1a1a;color:#eef0f2}
+</style>
+</helmet>
+<div style="min-height:100vh;display:flex;flex-direction:column;background:#eef0f2;font-size:11px;letter-spacing:0.02em">
+  <div ref="{{ touchCursorRef }}" style="position:fixed;left:0;top:0;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:rgba(57,255,20,0.35);border:1.5px solid rgba(57,255,20,0.8);pointer-events:none;z-index:9999;opacity:0;transition:opacity 0.15s"></div>
+
+  <header style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:9px 14px;border-bottom:1px solid #d1d5db;background:#f4f4f4;flex-wrap:wrap">
+    <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+      <span style="font-weight:700;font-size:11px;letter-spacing:0.14em">GESTURE_SCULPT</span>
+      <span style="font-size:9.5px;color:#6b7075;letter-spacing:0.1em">IHC · PHYSICAL-FORM · WEB CLIENT / v0.4</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:18px;font-size:9.5px;color:#6b7075;letter-spacing:0.08em">
+      <span>MODE: <span style="color:#1a1a1a">{{ mode }}</span></span>
+      <span>UNITS: MM</span>
+      <span>{{ stamp }}</span>
+    </div>
+  </header>
+
+  <div style="display:flex;align-items:stretch;gap:0;flex:1 1 auto;min-height:0;flex-wrap:wrap">
+
+    <aside style="width:206px;flex:1 1 200px;max-width:300px;min-width:186px;border-right:1px solid #d1d5db;background:#f4f4f4;display:flex;flex-direction:column;overflow:auto">
+      <div style="padding:11px 13px 13px;border-bottom:1px solid #d1d5db">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px"><span style="font-size:9px;letter-spacing:0.16em;color:#6b7075">01 · HAND_TRACKING</span><span style="font-size:9px;color:#1a1a1a">{{ tracking }}</span></div>
+        <div style="position:relative;aspect-ratio:4/3;background:#e4e7ea;border:1px solid #d1d5db;overflow:hidden">
+          <video ref="{{ videoRef }}" playsinline="true" muted="true" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);opacity:0.26;filter:grayscale(1) contrast(1.1)"></video>
+          <canvas ref="{{ camRef }}" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+          <div style="position:absolute;left:4px;top:4px;font-size:8px;letter-spacing:0.1em;color:#6b7075">CAM_00 / 640x480</div>
+        </div>
+        <sc-if value="{{ !camOn }}" hint-placeholder-val="{{ true }}">
+          <button onClick="{{ onEnableCam }}" style="margin-top:9px;width:100%;padding:7px 8px;background:#39ff14;color:#0a0a0a;border:1px solid #39ff14;border-radius:0;font-family:inherit;font-weight:700;font-size:9.5px;letter-spacing:0.14em;cursor:pointer" style-hover="background:#2fe80f">{{ camBtn }}</button>
+        </sc-if>
+        <sc-if value="{{ camOn }}" hint-placeholder-val="{{ false }}">
+          <button onClick="{{ onDisableCam }}" style="margin-top:9px;width:100%;padding:7px 8px;background:#6b7075;color:#f4f4f4;border:1px solid #6b7075;border-radius:0;font-family:inherit;font-size:9.5px;letter-spacing:0.14em;cursor:pointer" style-hover="background:#5a5f64">DESATIVAR CÂMERA</button>
+        </sc-if>
+        <div style="margin-top:9px;display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:9px;color:#6b7075">
+          <span>HANDS</span><span style="color:#1a1a1a;text-align:right">{{ hands }}</span>
+          <span>PTR.X</span><span style="color:#1a1a1a;text-align:right">{{ px }}</span>
+          <span>PTR.Y</span><span style="color:#1a1a1a;text-align:right">{{ py }}</span>
+          <span>PINCH</span><span style="color:#1a1a1a;text-align:right">{{ pz }}</span>
+          <span>FPS</span><span style="color:#1a1a1a;text-align:right">{{ fps }}</span>
+        </div>
+      </div>
+
+      <div style="padding:11px 13px 13px;border-bottom:1px solid #d1d5db">
+        <div style="font-size:9px;letter-spacing:0.16em;color:#6b7075;margin-bottom:9px">02 · MESH_METRICS</div>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:9px;color:#6b7075">
+          <span>PROFILE_NODES</span><span style="color:#1a1a1a;text-align:right">{{ nodes }}</span>
+          <span>VERTICES</span><span style="color:#1a1a1a;text-align:right">{{ verts }}</span>
+          <span>TRIANGLES</span><span style="color:#1a1a1a;text-align:right">{{ faces }}</span>
+          <span>HEIGHT_MM</span><span style="color:#1a1a1a;text-align:right">{{ hMM }}</span>
+          <span>Ø MAX_MM</span><span style="color:#1a1a1a;text-align:right">{{ dMM }}</span>
+          <span>VOL_CM3</span><span style="color:#1a1a1a;text-align:right">{{ volCC }}</span>
+        </div>
+        <div style="margin-top:10px;height:34px;display:flex;align-items:flex-end;gap:1px">
+          <sc-for list="{{ bars }}" as="bar" hint-placeholder-count="24">
+            <div style="{{ bar.style }}"></div>
+          </sc-for>
+        </div>
+        <div style="font-size:8px;color:#9aa0a6;margin-top:4px;letter-spacing:0.1em">RADIUS DISTRIBUTION · BASE → TOP</div>
+      </div>
+
+      <div style="padding:11px 13px 13px;flex:1 1 auto;min-height:90px">
+        <div style="font-size:9px;letter-spacing:0.16em;color:#6b7075;margin-bottom:8px">03 · EVENT_LOG</div>
+        <div style="display:flex;flex-direction:column;gap:3px;font-size:8.5px;color:#6b7075">
+          <sc-for list="{{ log }}" as="row" hint-placeholder-count="4">
+            <div style="display:flex;gap:8px"><span style="color:#9aa0a6">{{ row.t }}</span><span style="color:#1a1a1a">{{ row.m }}</span></div>
+          </sc-for>
+        </div>
+      </div>
+    </aside>
+
+    <main style="flex:3 1 320px;min-width:240px;position:relative;display:flex;flex-direction:column;background:#eef0f2">
+      <div ref="{{ vpRef }}" style="position:relative;flex:1 1 auto;min-height:420px;overflow:hidden;cursor:crosshair;background-image:linear-gradient(#e6e9ec 1px,transparent 1px),linear-gradient(90deg,#e6e9ec 1px,transparent 1px);background-size:28px 28px">
+        <canvas ref="{{ glRef }}" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>
+        <canvas ref="{{ ovRef }}" style="position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none"></canvas>
+        <div style="position:absolute;left:12px;top:11px;font-size:8.5px;letter-spacing:0.12em;color:#6b7075;pointer-events:none">
+          <div>VIEW / ISOMETRIC_45</div>
+          <div style="margin-top:2px">STATUS: {{ statusLine }}</div>
+        </div>
+        <div style="position:absolute;right:12px;top:11px;text-align:right;font-size:8.5px;letter-spacing:0.12em;color:#6b7075;pointer-events:none">
+          <div>FREEFORM_RADIAL_MESH</div>
+          <div style="margin-top:2px">SEG: {{ radialSeg }}</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 13px;border-top:1px solid #d1d5db;background:#f4f4f4;font-size:8.5px;color:#6b7075;letter-spacing:0.09em;flex-wrap:wrap">
+        <span>ARRASTAR = ESCULPIR (AFASTAR = EXPANDIR · APROXIMAR DO CENTRO = ENCOLHER) · SHIFT+ARRASTAR = ORBITAR · CMD/CTRL+Z = DESFAZER</span>
+        <span>DEDOS: AFASTAR DO CENTRO = EXPANDIR · APROXIMAR DO CENTRO = ENCOLHER · PINÇA LEVE = ZOOM · PINÇA FECHADA + MÃO PRA BAIXO = ALTURA</span>
+      </div>
+    </main>
+
+    <aside style="width:216px;flex:1 1 210px;max-width:310px;min-width:200px;border-left:1px solid #d1d5db;background:#f4f4f4;display:flex;flex-direction:column;overflow:auto">
+      <sc-if value="{{ isSculpt }}" hint-placeholder-val="{{ true }}">
+        <div>
+          <div style="padding:11px 13px 13px;border-bottom:1px solid #d1d5db">
+            <div style="font-size:9px;letter-spacing:0.16em;color:#6b7075;margin-bottom:11px">04 · FORM_PARAMETERS</div>
+            <div style="display:flex;flex-direction:column;gap:13px">
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7075;margin-bottom:2px"><span>ALTURA</span><span style="color:#1a1a1a">{{ hMM }}</span></div>
+                <input ref="{{ heightRef }}" type="range" min="0.4" max="2" step="0.01" value="{{ height }}" onChange="{{ onHeight }}" style="width:100%">
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7075;margin-bottom:2px"><span>SEGMENTOS_RADIAIS</span><span style="color:#1a1a1a">{{ radialSeg }}</span></div>
+                <input ref="{{ segRef }}" type="range" min="6" max="96" step="1" value="{{ radialSeg }}" onChange="{{ onSeg }}" style="width:100%">
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7075;margin-bottom:2px"><span>PINCEL_GESTUAL</span><span style="color:#1a1a1a">{{ brushLabel }}</span></div>
+                <input ref="{{ brushRef }}" type="range" min="1" max="10" step="1" value="{{ brush }}" onChange="{{ onBrush }}" style="width:100%">
+              </div>
+              <div style="font-size:8px;color:#9aa0a6;letter-spacing:0.08em;line-height:1.5">TOQUE (PINÇA) NA CÂMERA SOBRE O CONTROLE PARA AJUSTAR PELO AR</div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:14px">
+              <button onClick="{{ onSmooth }}" style="padding:7px 6px;background:transparent;color:#1a1a1a;border:1px solid #c4c9ce;border-radius:0;font-family:inherit;font-size:9px;letter-spacing:0.1em;cursor:pointer" style-hover="border-color:#1a1a1a">SUAVIZAR</button>
+              <button onClick="{{ onReset }}" style="padding:7px 6px;background:transparent;color:#1a1a1a;border:1px solid #c4c9ce;border-radius:0;font-family:inherit;font-size:9px;letter-spacing:0.1em;cursor:pointer" style-hover="border-color:#1a1a1a">RESETAR</button>
+            </div>
+          </div>
+          <div style="padding:12px 13px 14px">
+            <div style="font-size:9px;letter-spacing:0.16em;color:#6b7075;margin-bottom:8px">05 · CONFIRMAÇÃO</div>
+            <p style="margin:0 0 11px;font-size:9px;line-height:1.6;color:#6b7075;text-wrap:pretty">Congele a forma base para liberar o módulo de materiais, luz e exportação. A malha só é salva e a próxima fase só aparece ao clicar no botão abaixo.</p>
+            <button onClick="{{ onConfirm }}" style="width:100%;padding:9px 8px;background:#1a1a1a;color:#f4f4f4;border:1px solid #1a1a1a;border-radius:0;font-family:inherit;font-size:9.5px;letter-spacing:0.14em;cursor:pointer" style-hover="background:#333">CONGELAR FORMA →</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isFinish }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="padding:11px 13px 13px;border-bottom:1px solid #d1d5db">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span style="font-size:9px;letter-spacing:0.16em;color:#6b7075">06 · MATERIAL</span><span style="font-size:9px">{{ matCode }}</span></div>
+            <div style="display:flex;flex-direction:column;gap:1px">
+              <sc-for list="{{ materials }}" as="m" hint-placeholder-count="7">
+                <button onClick="{{ m.pick }}" style="position:relative;display:flex;align-items:center;gap:9px;width:100%;padding:7px 9px;background:transparent;border:1px solid #dde1e5;border-radius:0;font-family:inherit;font-size:9px;letter-spacing:0.08em;color:#1a1a1a;cursor:pointer;text-align:left" style-hover="border-color:#1a1a1a">
+                  <span style="width:14px;height:14px;flex:none;border:1px solid #c4c9ce;background:{{ m.swatch }}"></span>
+                  <span style="flex:1 1 auto">{{ m.name }}</span>
+                  <sc-if value="{{ m.sel }}" hint-placeholder-val="{{ false }}"><span style="width:5px;height:5px;background:#1a1a1a"></span></sc-if>
+                </button>
+              </sc-for>
+            </div>
+            <div style="margin-top:12px;padding-top:11px;border-top:1px solid #dde1e5">
+              <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7075;margin-bottom:8px"><span>COR_PERSONALIZADA</span><span style="color:#1a1a1a">{{ colorHex }}</span></div>
+              <div style="display:flex;gap:11px;align-items:flex-start">
+                <canvas ref="{{ wheelRef }}" style="width:92px;height:92px;flex:none;border-radius:50%;cursor:crosshair;touch-action:none"></canvas>
+                <div style="flex:1 1 auto;display:flex;flex-direction:column;gap:8px;min-width:0">
+                  <div>
+                    <div style="font-size:9px;color:#6b7075;margin-bottom:2px">BRILHO</div>
+                    <input type="range" min="0" max="1" step="0.01" value="{{ wheelV }}" onChange="{{ onWheelV }}" style="width:100%">
+                  </div>
+                  <button onClick="{{ onResetColor }}" style="padding:6px 7px;background:transparent;color:#6b7075;border:1px dashed #c4c9ce;border-radius:0;font-family:inherit;font-size:8.5px;letter-spacing:0.08em;cursor:pointer" style-hover="color:#1a1a1a">RESETAR COR</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style="padding:11px 13px 13px;border-bottom:1px solid #d1d5db">
+            <div style="font-size:9px;letter-spacing:0.16em;color:#6b7075;margin-bottom:11px">07 · STUDIO_LIGHT</div>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7075;margin-bottom:2px"><span>KEY_INTENSIDADE</span><span style="color:#1a1a1a">{{ keyL }}</span></div>
+                <input type="range" min="0" max="4" step="0.05" value="{{ key }}" onChange="{{ onKey }}" style="width:100%">
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7075;margin-bottom:2px"><span>KEY_AZIMUTE</span><span style="color:#1a1a1a">{{ angL }}</span></div>
+                <input type="range" min="0" max="360" step="1" value="{{ keyAngle }}" onChange="{{ onAngle }}" style="width:100%">
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7075;margin-bottom:2px"><span>FILL_DIFUSA</span><span style="color:#1a1a1a">{{ fillL }}</span></div>
+                <input type="range" min="0" max="2" step="0.05" value="{{ fill }}" onChange="{{ onFill }}" style="width:100%">
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7075;margin-bottom:2px"><span>SOMBRA_SUAVE</span><span style="color:#1a1a1a">{{ shL }}</span></div>
+                <input type="range" min="0" max="1" step="0.02" value="{{ shadow }}" onChange="{{ onShadow }}" style="width:100%">
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7075;margin-bottom:2px"><span>BRILHO_ESPECULAR</span><span style="color:#1a1a1a">{{ spL }}</span></div>
+                <input type="range" min="0" max="1" step="0.02" value="{{ spec }}" onChange="{{ onSpec }}" style="width:100%">
+              </div>
+            </div>
+          </div>
+          <div style="padding:11px 13px 14px">
+            <div style="font-size:9px;letter-spacing:0.16em;color:#6b7075;margin-bottom:9px">08 · EXPORT</div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <button onClick="{{ onSVG }}" style="display:flex;justify-content:space-between;padding:8px 9px;background:transparent;border:1px solid #c4c9ce;border-radius:0;font-family:inherit;font-size:9px;letter-spacing:0.1em;color:#1a1a1a;cursor:pointer" style-hover="border-color:#1a1a1a"><span>SALVAR SVG</span><span style="color:#9aa0a6">projeção ortográfica</span></button>
+              <button onClick="{{ onPY }}" style="display:flex;justify-content:space-between;padding:8px 9px;background:transparent;border:1px solid #c4c9ce;border-radius:0;font-family:inherit;font-size:9px;letter-spacing:0.1em;color:#1a1a1a;cursor:pointer" style-hover="border-color:#1a1a1a"><span>SCRIPT .PY</span><span style="color:#9aa0a6">blender / rhino</span></button>
+              <button onClick="{{ onJSON }}" style="display:flex;justify-content:space-between;padding:8px 9px;background:transparent;border:1px solid #c4c9ce;border-radius:0;font-family:inherit;font-size:9px;letter-spacing:0.1em;color:#1a1a1a;cursor:pointer" style-hover="border-color:#1a1a1a"><span>MALHA .JSON</span><span style="color:#9aa0a6">estrutura de nós</span></button>
+              <button onClick="{{ onOBJ }}" style="display:flex;justify-content:space-between;padding:8px 9px;background:transparent;border:1px solid #c4c9ce;border-radius:0;font-family:inherit;font-size:9px;letter-spacing:0.1em;color:#1a1a1a;cursor:pointer" style-hover="border-color:#1a1a1a"><span>MALHA .OBJ</span><span style="color:#9aa0a6">cad universal</span></button>
+            </div>
+            <button onClick="{{ onBack }}" style="width:100%;margin-top:10px;padding:8px;background:transparent;color:#6b7075;border:1px dashed #c4c9ce;border-radius:0;font-family:inherit;font-size:9px;letter-spacing:0.12em;cursor:pointer" style-hover="color:#1a1a1a">← VOLTAR A ESCULPIR</button>
+          </div>
+        </div>
+      </sc-if>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{}">
+class Component extends DCLogic {
+  vpRef = React.createRef();
+  glRef = React.createRef();
+  ovRef = React.createRef();
+  camRef = React.createRef();
+  videoRef = React.createRef();
+  wheelRef = React.createRef();
+  heightRef = React.createRef();
+  segRef = React.createRef();
+  brushRef = React.createRef();
+  touchCursorRef = React.createRef();
+
+  state = {
+    mode: 'GESTURE_SCULPT', tracking: 'OFFLINE', camBtn: 'ATIVAR CÂMERA',
+    hands: 0, px: '0.000', py: '0.000', pz: '0.000', fps: 0,
+    verts: 0, faces: 0, mat: 0, statusLine: 'AWAIT_INPUT',
+    height: 1.2, radialSeg: 48, brush: 4,
+    key: 1.7, keyAngle: 40, fill: 0.5, shadow: 0.6, spec: 0.35,
+    wheelH: 0, wheelS: 0, wheelV: 1,
+    stamp: '', log: [], profileTick: 0
+  };
+
+  /* Blender Principled BSDF reference presets (base_color / roughness / metallic / transmission / IOR) */
+  MATS = [
+    { name: 'CERÂMICA', code: 'CER-01', swatch: '#e8ded0', color: 0xe6dccd, rough: 0.38, metal: 0.0, clearcoat: 0.25, clearcoatRoughness: 0.12 },
+    { name: 'PLÁSTICO', code: 'PLA-02', swatch: '#2c2e30', color: 0x26282a, rough: 0.32, metal: 0.0, clearcoat: 0.12, clearcoatRoughness: 0.2 },
+    { name: 'METAL', code: 'MTL-03', swatch: '#d8dadd', color: 0xd6d8da, rough: 0.28, metal: 1.0 },
+    { name: 'MADEIRA', code: 'WOD-04', swatch: '#8a5a34', color: 0x8a5a34, rough: 0.55, metal: 0.0 },
+    { name: 'CONCRETO', code: 'CNC-05', swatch: '#a9aaa6', color: 0xa6a7a3, rough: 0.92, metal: 0.0 },
+    { name: 'VIDRO', code: 'GLS-06', swatch: '#eef3f5', color: 0xeef3f5, rough: 0.04, metal: 0.0, transmission: 0.95, thickness: 0.6, ior: 1.45 },
+    { name: 'ACRÍLICO', code: 'ACR-07', swatch: '#f2f0ea', color: 0xf2f0ea, rough: 0.09, metal: 0.0, transmission: 0.88, thickness: 0.4, ior: 1.49, clearcoat: 0.15 }
+  ];
+
+  N = 44;
+  colorOverrides = {};
+  undoStack = [];
+  OPEN_T = 0.08;   /* pinch wider than this = open hand → sculpt */
+  GRAB_T = 0.045;  /* pinch tighter than this = closed grab → height / touch */
+  PUSH_K = 3.4;    /* push/pull sensitivity for the away-from-center brush */
+  BASE_PT_COLOR = [0.10, 0.10, 0.10];
+  HILITE_COLOR = [0.22, 1.0, 0.08]; /* neon green brush-target preview */
+
+  componentDidMount() {
+    this.radius = this.defaultRadiusGrid(this.state.radialSeg);
+    this.orbit = { theta: Math.PI / 4, phi: Math.atan(1 / Math.SQRT2), dist: this.fitDist(this.state.height) };
+    this.landmarks = [];
+    this.zoomDir = 0;
+    this.lastPinch = null;
+    this.lastGrabY = null;
+    this.lastSculptDist = null;
+    this.highlight = { mode: 'none' };
+    this.frames = 0; this.lastFps = performance.now();
+    this.pushLog('SESSION_INIT');
+    this.tick = setInterval(() => this.setState({ stamp: this.nowStamp() }), 1000);
+    this.setState({ stamp: this.nowStamp() });
+    this.waitThree();
+    this.bindPointer();
+    this.onResize = () => this.resize();
+    window.addEventListener('resize', this.onResize);
+    this.onKeyDown = e => {
+      if ((e.key === 'z' || e.key === 'Z') && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+        e.preventDefault();
+        this.undo();
+      }
+    };
+    window.addEventListener('keydown', this.onKeyDown);
+  }
+
+  componentDidUpdate() {
+    if (this.state.mode === 'MATERIAL_FINISH' && !this.wheelBase) this.initWheel();
+  }
+
+  componentWillUnmount() {
+    clearInterval(this.tick);
+    window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('keydown', this.onKeyDown);
+    if (this.raf) cancelAnimationFrame(this.raf);
+    if (this.pumpRaf) cancelAnimationFrame(this.pumpRaf);
+    if (this.mpCamera && this.mpCamera.stop) { try { this.mpCamera.stop(); } catch (e) {} }
+    if (this.stream) this.stream.getTracks().forEach(t => t.stop());
+  }
+
+  nowStamp() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '.' + p(d.getMonth() + 1) + '.' + p(d.getDate()) + ' / ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
+  pushLog(m) {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    const t = p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+    this.setState(s => ({ log: [{ t, m }].concat(s.log).slice(0, 6) }));
+  }
+
+  fitDist(h) {
+    return Math.min(9, Math.max(2.6, (h * 2 / 2) / Math.tan(16 * Math.PI / 180) * 1.45));
+  }
+
+  /* radius[row][col]: row = height band (0..N-1), col = angular segment (0..seg-1).
+     A flat 1D profile revolved equally at every angle would always sculpt a mirrored
+     ring; this 2D grid lets a push/pull affect just one side of the object. */
+  defaultRadiusGrid(seg) {
+    const grid = [];
+    for (let i = 0; i < this.N; i++) {
+      const t = i / (this.N - 1);
+      const r = 0.40 + 0.20 * Math.sin(Math.PI * t) - 0.13 * t * t;
+      grid.push(new Array(seg).fill(r));
+    }
+    return grid;
+  }
+
+  resampleRadiusGrid(newSeg) {
+    const old = this.radius, oldSeg = old[0].length;
+    const grid = [];
+    for (let r = 0; r < this.N; r++) {
+      const row = [];
+      for (let c = 0; c < newSeg; c++) {
+        const srcF = (c / newSeg) * oldSeg;
+        const c0 = Math.floor(srcF) % oldSeg, c1 = (c0 + 1) % oldSeg, t = srcF - Math.floor(srcF);
+        row.push(old[r][c0] * (1 - t) + old[r][c1] * t);
+      }
+      grid.push(row);
+    }
+    return grid;
+  }
+
+  avgProfile() {
+    return this.radius.map(row => row.reduce((a, b) => a + b, 0) / row.length);
+  }
+
+  /* ---------- undo ---------- */
+  pushUndo() {
+    this.undoStack.push({ radius: this.radius.map(row => row.slice()), height: this.state.height });
+    if (this.undoStack.length > 40) this.undoStack.shift();
+  }
+
+  undo() {
+    if (this.state.mode !== 'GESTURE_SCULPT' || !this.undoStack.length) { this.pushLog('UNDO_EMPTY'); return; }
+    const snap = this.undoStack.pop();
+    this.radius = snap.radius;
+    this.setState({ height: snap.height }, () => { this.orbit.dist = this.fitDist(snap.height); this.rebuild(); });
+    this.pushLog('UNDO');
+  }
+
+  /* ---------- three.js ---------- */
+  waitThree() {
+    if (window.THREE) { this.initGL(); return; }
+    this.t3 = setTimeout(() => this.waitThree(), 120);
+  }
+
+  initGL() {
+    const THREE = window.THREE, canvas = this.glRef.current;
+    if (!canvas) return;
+    const scene = new THREE.Scene();
+    const cam = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    const grid = new THREE.GridHelper(8, 32, 0xc4c9ce, 0xdfe3e7);
+    grid.position.y = -0.02;
+    scene.add(grid);
+    const axis = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 2.6, 0)]),
+      new THREE.LineDashedMaterial({ color: 0x9aa0a6, dashSize: 0.06, gapSize: 0.05 })
+    );
+    axis.computeLineDistances();
+    scene.add(axis);
+
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.ShadowMaterial({ opacity: 0.22 }));
+    ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+    scene.add(ground);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x9aa0a6, 0.5);
+    scene.add(hemi);
+    const key = new THREE.DirectionalLight(0xffffff, 1.7);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.camera.left = -3; key.shadow.camera.right = 3;
+    key.shadow.camera.top = 3; key.shadow.camera.bottom = -3;
+    scene.add(key);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+    fill.position.set(-3, 2, -2.5);
+    scene.add(fill);
+
+    const wireMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a, wireframe: true, transparent: true, opacity: 0.5 });
+    const solidMat = new THREE.MeshPhysicalMaterial({ color: 0xc2c4c6, roughness: 0.85, metalness: 0, transmission: 0, thickness: 0, clearcoat: 0, clearcoatRoughness: 0.1 });
+    const ptsMat = new THREE.PointsMaterial({ vertexColors: true, size: 0.026 });
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), wireMat);
+    mesh.castShadow = true;
+    const pts = new THREE.Points(new THREE.BufferGeometry(), ptsMat);
+    scene.add(mesh); scene.add(pts);
+
+    this.gl = { THREE, scene, cam, renderer, mesh, pts, wireMat, solidMat, key, fill, hemi, ground, grid };
+    this.rebuild();
+    this.resize();
+    this.loop();
+    this.pushLog('RENDERER_READY');
+  }
+
+  resize() {
+    if (!this.gl || !this.vpRef.current) return;
+    const r = this.vpRef.current.getBoundingClientRect();
+    this.gl.renderer.setSize(r.width, r.height, false);
+    this.gl.cam.aspect = r.width / Math.max(r.height, 1);
+    this.gl.cam.updateProjectionMatrix();
+    const ov = this.ovRef.current;
+    if (ov) { ov.width = r.width; ov.height = r.height; }
+  }
+
+  /* custom row/col grid mesh (replaces LatheGeometry) so a sculpt can bulge
+     just one side of the object instead of the whole revolved ring */
+  rebuild() {
+    if (!this.gl) return;
+    const THREE = this.gl.THREE, h = this.state.height, seg = this.state.radialSeg, cols = seg + 1;
+    const positions = [];
+    for (let row = 0; row < this.N; row++) {
+      const y = (row / (this.N - 1)) * h * 2;
+      for (let col = 0; col <= seg; col++) {
+        const a = (col / seg) * Math.PI * 2;
+        const r = Math.max(0.03, this.radius[row][col % seg]);
+        positions.push(Math.cos(a) * r, y, Math.sin(a) * r);
+      }
+    }
+    const index = [];
+    for (let row = 0; row < this.N - 1; row++) {
+      for (let col = 0; col < seg; col++) {
+        const a = row * cols + col, b = (row + 1) * cols + col, c = (row + 1) * cols + col + 1, d = row * cols + col + 1;
+        index.push(a, b, d, b, c, d);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(positions), 3));
+    geo.setIndex(index);
+    geo.computeVertexNormals();
+    this.gl.mesh.geometry.dispose(); this.gl.mesh.geometry = geo;
+
+    const pg = new THREE.BufferGeometry();
+    pg.setAttribute('position', geo.getAttribute('position').clone());
+    const count = pg.getAttribute('position').count;
+    pg.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(count * 3), 3));
+    this.gl.pts.geometry.dispose(); this.gl.pts.geometry = pg;
+    this.paintPointColors();
+
+    const f = index.length / 3;
+    if (count !== this.state.verts) this.setState({ verts: count, faces: f });
+  }
+
+  /* ---------- brush-target highlight (neon green preview) ---------- */
+  rowFromY(ny) {
+    const t = Math.min(1, Math.max(0, 1 - ny));
+    return Math.round(t * (this.N - 1));
+  }
+
+  /* maps a viewport-normalized (nx, ny) to the height row + angular column it
+     targets, accounting for the current camera orbit angle */
+  targetCell(nx, ny) {
+    const seg = this.state.radialSeg;
+    const row = this.rowFromY(ny);
+    const facing = this.orbit.theta + Math.PI;
+    const targetAngle = facing + (nx - 0.5) * Math.PI;
+    const twoPi = Math.PI * 2;
+    const norm = ((targetAngle % twoPi) + twoPi) % twoPi;
+    const col = Math.round((norm / twoPi) * seg) % seg;
+    const colSpread = Math.max(1, Math.round(seg * 0.08));
+    return { row, col, colSpread };
+  }
+
+  setHighlight(mode, opts) {
+    this.highlight = Object.assign({ mode }, opts);
+    this.paintPointColors();
+  }
+
+  clearHighlight() { this.setHighlight('none', {}); }
+
+  paintPointColors() {
+    if (!this.gl) return;
+    const colorAttr = this.gl.pts.geometry.getAttribute('color');
+    if (!colorAttr) return;
+    const seg = this.state.radialSeg, cols = seg + 1;
+    const arr = colorAttr.array, count = colorAttr.count, hl = this.highlight || { mode: 'none' };
+    for (let i = 0; i < count; i++) {
+      const row = Math.floor(i / cols);
+      const colIdx = (i % cols) % seg;
+      let hit = false;
+      if (hl.mode === 'all') hit = true;
+      else if (hl.mode === 'ring') hit = Math.abs(row - hl.row) <= hl.spread;
+      else if (hl.mode === 'patch') {
+        const cd = Math.min(Math.abs(colIdx - hl.col), seg - Math.abs(colIdx - hl.col));
+        hit = Math.abs(row - hl.row) <= hl.rowSpread && cd <= hl.colSpread;
+      }
+      const c = hit ? this.HILITE_COLOR : this.BASE_PT_COLOR;
+      arr[i * 3] = c[0]; arr[i * 3 + 1] = c[1]; arr[i * 3 + 2] = c[2];
+    }
+    colorAttr.needsUpdate = true;
+  }
+
+  loop() {
+    this.raf = requestAnimationFrame(() => this.loop());
+    if (!this.gl) return;
+    const g = this.gl, s = this.state, o = this.orbit;
+    g.cam.position.set(
+      o.dist * Math.cos(o.phi) * Math.sin(o.theta),
+      o.dist * Math.sin(o.phi) + s.height * 0.8,
+      o.dist * Math.cos(o.phi) * Math.cos(o.theta)
+    );
+    g.cam.lookAt(0, s.height * 0.85, 0);
+    const a = s.keyAngle * Math.PI / 180;
+    g.key.position.set(Math.sin(a) * 4, 4.2, Math.cos(a) * 4);
+    g.key.intensity = s.mode === 'MATERIAL_FINISH' ? s.key : 0.9;
+    g.fill.intensity = s.fill;
+    g.key.shadow.radius = 1 + s.shadow * 8;
+    g.renderer.render(g.scene, g.cam);
+    this.drawOverlay();
+    this.frames++;
+    const now = performance.now();
+    if (now - this.lastFps > 700) {
+      this.setState({ fps: Math.round(this.frames * 1000 / (now - this.lastFps)) });
+      this.frames = 0; this.lastFps = now;
+    }
+  }
+
+  /* ---------- overlay: raw hand skeleton ---------- */
+  CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+  drawOverlay() {
+    const ov = this.ovRef.current; if (!ov) return;
+    const ctx = ov.getContext('2d');
+    ctx.clearRect(0, 0, ov.width, ov.height);
+    const hands = this.landmarks;
+    if (!hands.length) return;
+    ctx.lineWidth = 1;
+    hands.forEach((lm, hi) => {
+      ctx.strokeStyle = 'rgba(26,26,26,0.42)';
+      ctx.beginPath();
+      this.CONN.forEach(([a, b]) => {
+        ctx.moveTo((1 - lm[a].x) * ov.width, lm[a].y * ov.height);
+        ctx.lineTo((1 - lm[b].x) * ov.width, lm[b].y * ov.height);
+      });
+      ctx.stroke();
+      ctx.fillStyle = '#1a1a1a';
+      lm.forEach((p, i) => {
+        if (i === 4 || i === 8) return;
+        ctx.fillRect((1 - p.x) * ov.width - 1.5, p.y * ov.height - 1.5, 3, 3);
+      });
+      if (hi !== 0) return;
+
+      /* identify thumb (orange) + index (cyan) distinctly — these two drive sculpt/zoom/height */
+      const thumb = lm[4], index = lm[8];
+      const tx = (1 - thumb.x) * ov.width, ty = thumb.y * ov.height;
+      const ix = (1 - index.x) * ov.width, iy = index.y * ov.height;
+      ctx.strokeStyle = 'rgba(154,160,166,0.6)';
+      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(ix, iy); ctx.stroke();
+      ctx.fillStyle = '#ff8a1a';
+      ctx.beginPath(); ctx.arc(tx, ty, 4.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#19c1ff';
+      ctx.beginPath(); ctx.arc(ix, iy, 4.5, 0, Math.PI * 2); ctx.fill();
+
+      const dir = this.zoomDir || 0;
+      if (dir !== 0) {
+        /* pointer feedback: green ring = object growing, red ring = object shrinking */
+        const mx = (tx + ix) / 2, my = (ty + iy) / 2;
+        ctx.strokeStyle = dir > 0 ? '#39ff14' : '#ff3b30';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.arc(mx, my, 16, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = dir > 0 ? '#39ff14' : '#ff3b30';
+        ctx.font = '13px monospace';
+        ctx.fillText(dir > 0 ? '+' : '–', mx - 3, my + 4);
+        ctx.lineWidth = 1;
+      } else {
+        ctx.strokeStyle = 'rgba(26,26,26,0.5)';
+        ctx.beginPath(); ctx.arc(ix, iy, 13, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, iy); ctx.lineTo(ix - 15, iy); ctx.moveTo(ix + 15, iy); ctx.lineTo(ov.width, iy);
+        ctx.moveTo(ix, 0); ctx.lineTo(ix, iy - 15); ctx.moveTo(ix, iy + 15); ctx.lineTo(ix, ov.height);
+        ctx.strokeStyle = 'rgba(154,160,166,0.5)'; ctx.stroke();
+      }
+    });
+    // camera thumbnail skeleton
+    const cc = this.camRef.current;
+    if (cc) {
+      const r = cc.getBoundingClientRect();
+      cc.width = Math.max(r.width, 4); cc.height = Math.max(r.height, 4);
+      const c2 = cc.getContext('2d');
+      c2.clearRect(0, 0, cc.width, cc.height);
+      c2.strokeStyle = '#1a1a1a'; c2.lineWidth = 1;
+      hands.forEach(lm => {
+        c2.beginPath();
+        this.CONN.forEach(([a, b]) => {
+          c2.moveTo((1 - lm[a].x) * cc.width, lm[a].y * cc.height);
+          c2.lineTo((1 - lm[b].x) * cc.width, lm[b].y * cc.height);
+        });
+        c2.stroke();
+        c2.fillStyle = '#ff8a1a';
+        c2.beginPath(); c2.arc((1 - lm[4].x) * cc.width, lm[4].y * cc.height, 2.2, 0, Math.PI * 2); c2.fill();
+        c2.fillStyle = '#19c1ff';
+        c2.beginPath(); c2.arc((1 - lm[8].x) * cc.width, lm[8].y * cc.height, 2.2, 0, Math.PI * 2); c2.fill();
+      });
+    }
+  }
+
+  /* ---------- MediaPipe ---------- */
+  async enableCam() {
+    if (this.camOn) return;
+    if (!window.Hands) { this.setState({ tracking: 'LIB_MISSING' }); this.pushLog('MEDIAPIPE_UNAVAILABLE'); return; }
+    this.setState({ tracking: 'REQUESTING', camBtn: 'CONECTANDO...' });
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+      this.stream = stream;
+      const v = this.videoRef.current;
+      v.srcObject = stream; await v.play();
+      const hands = new window.Hands({ locateFile: f => 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/' + f });
+      hands.setOptions({ maxNumHands: 2, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
+      hands.onResults(r => this.onHands(r));
+      this.hands = hands;
+      this.camOn = true;
+      this.setState({ tracking: 'TRACKING_ACTIVE', camBtn: 'WEBCAM ONLINE' });
+      this.pushLog('CV_PIPELINE_START');
+      const pump = async () => {
+        if (!this.camOn) return;
+        if (v.readyState >= 2) { try { await hands.send({ image: v }); } catch (e) {} }
+        this.pumpRaf = requestAnimationFrame(pump);
+      };
+      pump();
+    } catch (e) {
+      this.setState({ tracking: 'CAM_DENIED', camBtn: 'TENTAR NOVAMENTE' });
+      this.pushLog('CAM_ACCESS_DENIED');
+    }
+  }
+
+  disableCam() {
+    if (!this.camOn) return;
+    this.camOn = false;
+    if (this.pumpRaf) cancelAnimationFrame(this.pumpRaf);
+    if (this.hands && this.hands.close) { try { this.hands.close(); } catch (e) {} }
+    if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
+    if (this.videoRef.current) this.videoRef.current.srcObject = null;
+    this.landmarks = [];
+    this.lastPinch = null; this.lastGrabY = null; this.lastSculptDist = null; this.zoomDir = 0;
+    this.clearHighlight();
+    if (this.touchCursorRef.current) this.touchCursorRef.current.style.opacity = '0';
+    this.setState({
+      tracking: 'OFFLINE', camBtn: 'ATIVAR CÂMERA', hands: 0,
+      statusLine: this.state.mode === 'GESTURE_SCULPT' ? 'AWAIT_INPUT' : 'VIEW'
+    });
+    this.pushLog('CAM_DISABLED');
+  }
+
+  /* Gesture set — driven only by the thumb (lm[4]) + index (lm[8]) tips:
+     OPEN  (pinch > OPEN_T)   → sculpt: moving away from center expands that
+                                spot, moving toward center shrinks it
+     TIGHT (pinch < GRAB_T)   → touch: over a FORM_PARAMETERS slider it drags
+                                that control; over the viewport it grabs the
+                                form and moving the hand vertically sets height
+     MID   (in between)       → pinch opening/closing zooms the camera        */
+  onHands(res) {
+    const lms = res.multiHandLandmarks || [];
+    this.landmarks = lms;
+    if (this.state.hands !== lms.length) this.setState({ hands: lms.length });
+    if (!lms.length) {
+      this.lastPinch = null; this.lastGrabY = null; this.lastSculptDist = null; this.zoomDir = 0;
+      this.clearHighlight();
+      if (this.touchCursorRef.current) this.touchCursorRef.current.style.opacity = '0';
+      this.setState({ statusLine: 'NO_HAND' });
+      return;
+    }
+
+    const lm = lms[0];
+    const ix = 1 - lm[8].x, iy = lm[8].y;
+    const pinch = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+    const gy = (lm[4].y + lm[8].y) / 2;
+    const inSculpt = this.state.mode === 'GESTURE_SCULPT';
+
+    /* index tip doubles as an air cursor: a tight pinch over ALTURA,
+       SEGMENTOS_RADIAIS or PINCEL_GESTUAL drags that slider directly */
+    if (inSculpt && this.updateTouchCursor(ix, iy, pinch)) {
+      this.lastPinch = null; this.lastGrabY = null; this.lastSculptDist = null; this.zoomDir = 0;
+      this.clearHighlight();
+      this.setState({ statusLine: 'TOUCH_UI' });
+      if (this.frames % 3 === 0) this.setState({ px: ix.toFixed(3), py: iy.toFixed(3), pz: pinch.toFixed(3) });
+      return;
+    }
+
+    if (inSculpt && pinch > this.OPEN_T) {
+      this.lastPinch = null; this.lastGrabY = null; this.zoomDir = 0;
+      const { row, col, colSpread } = this.targetCell(ix, iy);
+      this.setHighlight('patch', { row, col, rowSpread: this.state.brush, colSpread });
+      this.sculpt(ix, iy);
+      this.setState({ statusLine: 'SCULPTING' });
+    } else if (inSculpt && pinch < this.GRAB_T) {
+      this.lastPinch = null; this.zoomDir = 0; this.lastSculptDist = null;
+      this.setHighlight('all', {});
+      if (this.lastGrabY == null) {
+        this.pushUndo();
+      } else {
+        const dy = gy - this.lastGrabY;
+        const h = Math.min(2, Math.max(0.4, this.state.height + dy * 1.6));
+        this.setState({ height: h }, () => { this.orbit.dist = this.fitDist(h); this.rebuild(); });
+      }
+      this.lastGrabY = gy;
+      this.setState({ statusLine: 'HEIGHT_GRAB' });
+    } else if (pinch >= this.GRAB_T && pinch <= this.OPEN_T) {
+      this.lastGrabY = null; this.lastSculptDist = null;
+      this.clearHighlight();
+      if (this.lastPinch != null) {
+        const d = pinch - this.lastPinch;
+        this.orbit.dist = Math.min(9, Math.max(1.6, this.orbit.dist - d * 22));
+        this.zoomDir = Math.abs(d) < 0.0015 ? 0 : (d > 0 ? 1 : -1);
+      }
+      this.lastPinch = pinch;
+      this.setState({ statusLine: 'PINCH_ZOOM' });
+    } else {
+      this.lastPinch = null; this.lastGrabY = null; this.lastSculptDist = null; this.zoomDir = 0;
+      this.clearHighlight();
+      this.setState({ statusLine: inSculpt ? 'AWAIT_INPUT' : 'VIEW' });
+    }
+
+    if (this.frames % 3 === 0) {
+      this.setState({ px: ix.toFixed(3), py: iy.toFixed(3), pz: pinch.toFixed(3) });
+    }
+  }
+
+  /* index tip as an air cursor for the ALTURA / SEGMENTOS_RADIAIS / PINCEL_GESTUAL
+     sliders: draws a floating dot at the fingertip's page position and, while
+     pinched tight over one of those controls, drives it directly. Returns true
+     when the frame was consumed by a UI control (so mesh gestures are skipped). */
+  updateTouchCursor(nx, ny, pinch) {
+    const el = this.touchCursorRef.current; if (!el) return false;
+    const sx = nx * window.innerWidth, sy = ny * window.innerHeight;
+    el.style.left = sx + 'px'; el.style.top = sy + 'px'; el.style.opacity = '1';
+
+    const targets = [
+      { ref: this.heightRef, apply: t => this.applySliderHeight(t) },
+      { ref: this.segRef, apply: t => this.applySliderSeg(t) },
+      { ref: this.brushRef, apply: t => this.applySliderBrush(t) }
+    ];
+    let hit = null;
+    for (const t of targets) {
+      const node = t.ref.current; if (!node) continue;
+      const r = node.getBoundingClientRect();
+      if (sx >= r.left - 10 && sx <= r.right + 10 && sy >= r.top - 12 && sy <= r.bottom + 12) { hit = { ...t, rect: r }; break; }
+    }
+
+    const touching = pinch < this.GRAB_T;
+    if (hit && touching) {
+      el.style.background = 'rgba(57,255,20,0.85)';
+      el.style.transform = 'scale(1.15)';
+      const frac = Math.min(1, Math.max(0, (sx - hit.rect.left) / hit.rect.width));
+      hit.apply(frac);
+      return true;
+    }
+    el.style.background = hit ? 'rgba(57,255,20,0.6)' : 'rgba(57,255,20,0.35)';
+    el.style.transform = 'scale(1)';
+    return false;
+  }
+
+  applySliderHeight(t) {
+    const h = 0.4 + t * (2 - 0.4);
+    this.setState({ height: h }, () => { this.orbit.dist = this.fitDist(h); this.rebuild(); });
+  }
+
+  applySliderSeg(t) {
+    const seg = Math.round(6 + t * (96 - 6));
+    if (seg === this.state.radialSeg) return;
+    this.radius = this.resampleRadiusGrid(seg);
+    this.setState({ radialSeg: seg }, () => this.rebuild());
+  }
+
+  applySliderBrush(t) {
+    const b = Math.round(1 + t * (10 - 1));
+    if (b !== this.state.brush) this.setState({ brush: b });
+  }
+
+  /* ---------- sculpting: push/pull based on distance from the object's
+     screen-center axis — moving away from center expands the targeted patch,
+     moving toward it shrinks that same patch (never the full mirrored ring) */
+  sculpt(nx, ny) {
+    const { row, col, colSpread } = this.targetCell(nx, ny);
+    const dist = Math.abs(nx - 0.5);
+    if (this.lastSculptDist == null) { this.pushUndo(); this.lastSculptDist = dist; return; }
+    const delta = dist - this.lastSculptDist;
+    this.lastSculptDist = dist;
+    if (Math.abs(delta) < 1e-5) return;
+
+    const seg = this.state.radialSeg, b = this.state.brush;
+    for (let i = -b; i <= b; i++) {
+      const r = row + i;
+      if (r < 0 || r >= this.N) continue;
+      const rw = Math.exp(-(i * i) / (2 * (b * 0.55) * (b * 0.55) + 0.001));
+      for (let j = -colSpread; j <= colSpread; j++) {
+        const c = ((col + j) % seg + seg) % seg;
+        const cw = Math.exp(-(j * j) / (2 * (colSpread * 0.6) * (colSpread * 0.6) + 0.001));
+        const cur = this.radius[r][c];
+        this.radius[r][c] = Math.min(1.3, Math.max(0.03, cur + delta * rw * cw * this.PUSH_K));
+      }
+    }
+    this.rebuild();
+  }
+
+  bindPointer() {
+    const el = this.vpRef.current; if (!el) return;
+    let drag = null;
+    el.addEventListener('pointerdown', e => {
+      el.setPointerCapture(e.pointerId);
+      drag = (e.shiftKey || e.button === 2) ? 'orbit' : 'sculpt';
+      this.last = { x: e.clientX, y: e.clientY };
+      if (drag === 'sculpt') this.pointerSculpt(e);
+    });
+    el.addEventListener('pointermove', e => {
+      const r = el.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+      this.setState({ px: px.toFixed(3), py: py.toFixed(3) });
+      if (this.state.mode === 'GESTURE_SCULPT' && drag !== 'orbit') {
+        const { row, col, colSpread } = this.targetCell(px, py);
+        this.setHighlight('patch', { row, col, rowSpread: this.state.brush, colSpread });
+      }
+      if (!drag) return;
+      if (drag === 'orbit') {
+        this.orbit.theta -= (e.clientX - this.last.x) * 0.008;
+        this.orbit.phi = Math.max(-0.4, Math.min(1.3, this.orbit.phi + (e.clientY - this.last.y) * 0.005));
+        this.last = { x: e.clientX, y: e.clientY };
+      } else this.pointerSculpt(e);
+    });
+    const up = () => { if (drag === 'sculpt') { this.pushLog('VERTEX_EDIT_COMMIT'); this.lastSculptDist = null; } drag = null; };
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointerleave', () => { up(); this.clearHighlight(); });
+    el.addEventListener('contextmenu', e => e.preventDefault());
+    el.addEventListener('wheel', e => {
+      e.preventDefault();
+      this.orbit.dist = Math.min(9, Math.max(1.6, this.orbit.dist + e.deltaY * 0.0035));
+    }, { passive: false });
+  }
+
+  pointerSculpt(e) {
+    if (this.state.mode !== 'GESTURE_SCULPT') return;
+    const r = this.vpRef.current.getBoundingClientRect();
+    this.sculpt((e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+  }
+
+  confirm() {
+    /* the only path into MATERIAL_FINISH — mesh is frozen/saved and the next
+       phase is shown exclusively when the user clicks this button */
+    if (!this.gl) return;
+    this.gl.mesh.material = this.gl.solidMat;
+    this.applyMaterial(this.state.mat);
+    this.gl.pts.visible = false;
+    this.clearHighlight();
+    this.lastSculptDist = null; this.lastGrabY = null;
+    this.setState({ mode: 'MATERIAL_FINISH', statusLine: 'FORM_FROZEN' });
+    this.pushLog('FORM_FROZEN → FINISH');
+  }
+
+  back() {
+    if (!this.gl) return;
+    this.gl.mesh.material = this.gl.wireMat;
+    this.gl.pts.visible = true;
+    this.clearHighlight();
+    this.wheelBase = null;
+    this.setState({ mode: 'GESTURE_SCULPT', statusLine: 'AWAIT_INPUT' });
+    this.pushLog('RETURN_TO_SCULPT');
+  }
+
+  /* ---------- material + custom color ---------- */
+  effColor(i) {
+    const o = this.colorOverrides[i];
+    return o ? o.num : this.MATS[i].color;
+  }
+
+  applyMaterial(i) {
+    if (!this.gl) return;
+    const m = this.MATS[i], mat = this.gl.solidMat;
+    mat.color.setHex(this.effColor(i));
+    mat.roughness = Math.max(0.03, m.rough - this.state.spec * 0.35);
+    mat.metalness = m.metal;
+    mat.transmission = m.transmission || 0;
+    mat.thickness = m.thickness || 0;
+    mat.ior = m.ior || 1.5;
+    mat.clearcoat = m.clearcoat || 0;
+    mat.clearcoatRoughness = m.clearcoatRoughness != null ? m.clearcoatRoughness : 0.1;
+  }
+
+  setMat(i) {
+    const [r, g, b] = this.hexToRgbArr(this.effColor(i));
+    const [h, s, v] = this.rgbToHsv(r, g, b);
+    this.setState({ mat: i, wheelH: h, wheelS: s, wheelV: v }, () => this.paintWheel());
+    this.applyMaterial(i);
+    this.pushLog('MATERIAL := ' + this.MATS[i].code);
+  }
+
+  hexToRgbArr(hex) { return [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255]; }
+  rgbToHex(r, g, b) { return (r << 16) | (g << 8) | b; }
+
+  hsvToRgb(h, s, v) {
+    const i = Math.floor(h * 6), f = h * 6 - i;
+    const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+    let r, g, b;
+    switch (i % 6) {
+      case 0: r = v; g = t; b = p; break;
+      case 1: r = q; g = v; b = p; break;
+      case 2: r = p; g = v; b = t; break;
+      case 3: r = p; g = q; b = v; break;
+      case 4: r = t; g = p; b = v; break;
+      default: r = v; g = p; b = q;
+    }
+    return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+  }
+
+  rgbToHsv(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    let h = 0;
+    if (d !== 0) {
+      switch (max) {
+        case r: h = ((g - b) / d + (g < b ? 6 : 0)); break;
+        case g: h = (b - r) / d + 2; break;
+        default: h = (r - g) / d + 4;
+      }
+      h /= 6;
+    }
+    return [h, max === 0 ? 0 : d / max, max];
+  }
+
+  initWheel() {
+    const c = this.wheelRef.current; if (!c) return;
+    const size = 108;
+    c.width = size; c.height = size;
+    const ctx = c.getContext('2d');
+    const cx = size / 2, cy = size / 2, radius = size / 2 - 1;
+    const img = ctx.createImageData(size, size);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dx = x - cx, dy = y - cy, r = Math.sqrt(dx * dx + dy * dy), idx = (y * size + x) * 4;
+        if (r > radius) { img.data[idx + 3] = 0; continue; }
+        let theta = Math.atan2(dy, dx); if (theta < 0) theta += Math.PI * 2;
+        const [rr, gg, bb] = this.hsvToRgb(theta / (Math.PI * 2), Math.min(1, r / radius), 1);
+        img.data[idx] = rr; img.data[idx + 1] = gg; img.data[idx + 2] = bb; img.data[idx + 3] = 255;
+      }
+    }
+    this.wheelBase = img; this.wheelSize = size;
+    this.paintWheel();
+    this.bindWheelPointer();
+  }
+
+  paintWheel() {
+    const c = this.wheelRef.current; if (!c || !this.wheelBase) return;
+    const ctx = c.getContext('2d');
+    ctx.putImageData(this.wheelBase, 0, 0);
+    const size = this.wheelSize, cx = size / 2, cy = size / 2, radius = size / 2 - 1;
+    const s = this.state, theta = s.wheelH * Math.PI * 2, r = s.wheelS * radius;
+    const x = cx + Math.cos(theta) * r, y = cy + Math.sin(theta) * r;
+    ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.strokeStyle = '#f4f4f4'; ctx.lineWidth = 2.5; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  bindWheelPointer() {
+    const c = this.wheelRef.current; if (!c || c.__bound) return;
+    c.__bound = true;
+    let dragging = false;
+    const pick = e => {
+      const rect = c.getBoundingClientRect();
+      const size = this.wheelSize, cx = size / 2, cy = size / 2, radius = size / 2 - 1;
+      const x = (e.clientX - rect.left) * (size / rect.width) - cx;
+      const y = (e.clientY - rect.top) * (size / rect.height) - cy;
+      const r = Math.min(radius, Math.sqrt(x * x + y * y));
+      let theta = Math.atan2(y, x); if (theta < 0) theta += Math.PI * 2;
+      this.setState({ wheelH: theta / (Math.PI * 2), wheelS: r / radius }, () => { this.paintWheel(); this.applyWheelColor(); });
+    };
+    c.addEventListener('pointerdown', e => { dragging = true; c.setPointerCapture(e.pointerId); pick(e); });
+    c.addEventListener('pointermove', e => { if (dragging) pick(e); });
+    c.addEventListener('pointerup', () => { dragging = false; });
+    c.addEventListener('pointerleave', () => { dragging = false; });
+  }
+
+  applyWheelColor() {
+    const s = this.state;
+    const [r, g, b] = this.hsvToRgb(s.wheelH, s.wheelS, s.wheelV);
+    const num = this.rgbToHex(r, g, b);
+    this.colorOverrides[s.mat] = { num, hex: '#' + num.toString(16).padStart(6, '0') };
+    if (this.gl) this.gl.solidMat.color.setHex(num);
+    this.forceUpdate();
+  }
+
+  /* ---------- export ---------- */
+  dl(name, text, type) {
+    const b = new Blob([text], { type: type || 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(b); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    this.pushLog('EXPORT ' + name.split('.').pop().toUpperCase());
+  }
+
+  /* silhouette approximation: radius averaged across all angular segments per row */
+  mm() { return this.avgProfile().map((r, i) => [r * 100, (i / (this.N - 1)) * this.state.height * 200]); }
+
+  exportSVG() {
+    const p = this.mm(), H = this.state.height * 200, W = 100 * 2.6;
+    const cx = W / 2, pad = 40;
+    const y = v => pad + H - v;
+    let right = '', left = '';
+    p.forEach((q, i) => { right += (i ? ' L ' : 'M ') + (cx + q[0]).toFixed(2) + ' ' + y(q[1]).toFixed(2); });
+    for (let i = p.length - 1; i >= 0; i--) left += ' L ' + (cx - p[i][0]).toFixed(2) + ' ' + y(p[i][1]).toFixed(2);
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + (H + pad * 2) + '" viewBox="0 0 ' + W + ' ' + (H + pad * 2) + '">'
+      + '<rect width="100%" height="100%" fill="#f4f4f4"/>'
+      + '<path d="' + right + left + ' Z" fill="none" stroke="#1a1a1a" stroke-width="1"/>'
+      + '<line x1="' + cx + '" y1="' + (pad - 12) + '" x2="' + cx + '" y2="' + (pad + H + 12) + '" stroke="#9aa0a6" stroke-width="0.5" stroke-dasharray="4 3"/>'
+      + '<text x="10" y="18" font-family="monospace" font-size="9" fill="#1a1a1a">ORTHOGRAPHIC PROFILE · MM · NODES ' + this.N + '</text>'
+      + '<text x="10" y="' + (H + pad * 2 - 10) + '" font-family="monospace" font-size="9" fill="#6b7075">H ' + H.toFixed(1) + ' · D ' + (Math.max.apply(null, p.map(q => q[0])) * 2).toFixed(1) + '</text>'
+      + '</svg>';
+    this.dl('product-profile.svg', svg, 'image/svg+xml');
+  }
+
+  exportPY() {
+    const p = this.mm();
+    const s = ['# GESTURE_SCULPT export · radial-average profile (lathe approximation)',
+      '# The sculpt is a freeform per-angle mesh — this script revolves the AVERAGE',
+      '# radius per height band, so one-sided pushes/pulls are flattened out here.',
+      '# For the exact asymmetric shape, use the .obj export instead.',
+      '# Blender 3.x+ / bpy · units: millimeters (scaled 0.001)',
+      'import bpy, bmesh, math',
+      '',
+      'PROFILE = [' + p.map(q => '(' + q[0].toFixed(3) + ', ' + q[1].toFixed(3) + ')').join(', ') + ']',
+      'SEGMENTS = ' + this.state.radialSeg,
+      'MATERIAL = "' + this.MATS[this.state.mat].code + '"',
+      '',
+      'mesh = bpy.data.meshes.new("SculptedProduct")',
+      'obj = bpy.data.objects.new("SculptedProduct", mesh)',
+      'bpy.context.collection.objects.link(obj)',
+      'bm = bmesh.new()',
+      'verts = [bm.verts.new((x * 0.001, 0.0, z * 0.001)) for x, z in PROFILE]',
+      'edges = [bm.edges.new((verts[i], verts[i + 1])) for i in range(len(verts) - 1)]',
+      'bmesh.ops.spin(bm, geom=edges, axis=(0, 0, 1), cent=(0, 0, 0),',
+      '               dvec=(0, 0, 0), angle=math.radians(360), steps=SEGMENTS, use_merge=True)',
+      'bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)',
+      'bm.to_mesh(mesh)',
+      'bm.free()',
+      'bpy.ops.object.shade_smooth()'].join('\n');
+    this.dl('sculpted_product.py', s);
+  }
+
+  exportJSON() {
+    const m = this.MATS[this.state.mat];
+    const o = {
+      generator: 'GESTURE_SCULPT v0.4', units: 'mm', type: 'freeform_radial_grid',
+      created: new Date().toISOString(),
+      profile_nodes: this.mm().map(q => ({ r: +q[0].toFixed(3), y: +q[1].toFixed(3) })),
+      radial_segments: this.state.radialSeg,
+      mesh_grid: {
+        note: 'radius_mm[row][col] — the exact per-angle sculpt, unlike profile_nodes above which is a radial average',
+        rows: this.N, segments: this.state.radialSeg,
+        radius_mm: this.radius.map(row => row.map(r => +(r * 100).toFixed(3)))
+      },
+      metrics: { vertices: this.state.verts, triangles: this.state.faces, height_mm: +(this.state.height * 200).toFixed(2) },
+      material: {
+        code: m.code, name: m.name, roughness: m.rough, metalness: m.metal,
+        transmission: m.transmission || 0, ior: m.ior || 1.5,
+        color: '#' + this.effColor(this.state.mat).toString(16).padStart(6, '0')
+      },
+      light: { key: this.state.key, azimuth: this.state.keyAngle, fill: this.state.fill, shadow: this.state.shadow, specular: this.state.spec }
+    };
+    this.dl('sculpted_product.json', JSON.stringify(o, null, 2), 'application/json');
+  }
+
+  exportOBJ() {
+    if (!this.gl) return;
+    const g = this.gl.mesh.geometry, pos = g.getAttribute('position'), idx = g.index;
+    let s = '# GESTURE_SCULPT v0.4 · mm\no SculptedProduct\n';
+    for (let i = 0; i < pos.count; i++) s += 'v ' + (pos.getX(i) * 100).toFixed(4) + ' ' + (pos.getY(i) * 100).toFixed(4) + ' ' + (pos.getZ(i) * 100).toFixed(4) + '\n';
+    if (idx) for (let i = 0; i < idx.count; i += 3) s += 'f ' + (idx.getX(i) + 1) + ' ' + (idx.getX(i + 1) + 1) + ' ' + (idx.getX(i + 2) + 1) + '\n';
+    this.dl('sculpted_product.obj', s);
+  }
+
+  renderVals() {
+    const s = this.state, prof = this.radius ? this.avgProfile() : this.defaultRadiusGrid(s.radialSeg).map(row => row[0]);
+    const maxR = Math.max.apply(null, prof);
+    const h = s.height * 200;
+    let vol = 0;
+    for (let i = 0; i < prof.length - 1; i++) {
+      const dy = (h / (prof.length - 1)) / 10;
+      const r1 = prof[i] * 10, r2 = prof[i + 1] * 10;
+      vol += Math.PI * dy * (r1 * r1 + r1 * r2 + r2 * r2) / 3;
+    }
+    const bars = [];
+    for (let i = 0; i < 26; i++) {
+      const r = prof[Math.round(i / 25 * (prof.length - 1))];
+      bars.push({ style: { flex: '1 1 0', height: Math.max(2, (r / 1.3) * 34) + 'px', background: i % 2 ? '#1a1a1a' : '#6b7075', opacity: 0.85 } });
+    }
+    return {
+      mode: s.mode, tracking: s.tracking, camBtn: s.camBtn, hands: s.hands,
+      px: s.px, py: s.py, pz: s.pz, fps: s.fps, verts: s.verts, faces: s.faces,
+      nodes: this.N, statusLine: s.statusLine,
+      hMM: h.toFixed(0) + ' mm', dMM: (maxR * 200).toFixed(0) + ' mm', volCC: (vol / 1000).toFixed(1),
+      stamp: s.stamp, log: s.log, bars,
+      height: s.height, radialSeg: s.radialSeg, brush: s.brush,
+      brushLabel: s.brush + ' NÓS', key: s.key, keyAngle: s.keyAngle, fill: s.fill, shadow: s.shadow, spec: s.spec,
+      keyL: s.key.toFixed(2), angL: s.keyAngle + '°', fillL: s.fill.toFixed(2), shL: s.shadow.toFixed(2), spL: s.spec.toFixed(2),
+      isSculpt: s.mode === 'GESTURE_SCULPT', isFinish: s.mode === 'MATERIAL_FINISH',
+      matCode: this.MATS[s.mat].code,
+      materials: this.MATS.map((m, i) => ({
+        name: m.name,
+        swatch: this.colorOverrides[i] ? this.colorOverrides[i].hex : m.swatch,
+        sel: i === s.mat, pick: () => this.setMat(i)
+      })),
+      wheelH: s.wheelH, wheelS: s.wheelS, wheelV: s.wheelV,
+      colorHex: (() => { const [r, g, b] = this.hsvToRgb(s.wheelH, s.wheelS, s.wheelV); return '#' + this.rgbToHex(r, g, b).toString(16).padStart(6, '0').toUpperCase(); })(),
+      wheelRef: this.wheelRef,
+      onWheelV: e => { this.setState({ wheelV: +e.target.value }, () => { this.paintWheel(); this.applyWheelColor(); }); },
+      onResetColor: () => {
+        delete this.colorOverrides[this.state.mat];
+        const [r, g, b] = this.hexToRgbArr(this.MATS[this.state.mat].color);
+        const [h, sat, v] = this.rgbToHsv(r, g, b);
+        this.setState({ wheelH: h, wheelS: sat, wheelV: v }, () => { this.paintWheel(); this.applyMaterial(this.state.mat); });
+        this.pushLog('COLOR_RESET');
+      },
+      videoRef: this.videoRef, camRef: this.camRef, glRef: this.glRef, ovRef: this.ovRef, vpRef: this.vpRef,
+      camOn: !!this.camOn,
+      onEnableCam: () => this.enableCam(),
+      onDisableCam: () => this.disableCam(),
+      heightRef: this.heightRef, segRef: this.segRef, brushRef: this.brushRef, touchCursorRef: this.touchCursorRef,
+      onHeight: e => {
+        this.pushUndo();
+        const v = +e.target.value;
+        this.setState({ height: v }, () => { this.orbit.dist = this.fitDist(v); this.rebuild(); });
+      },
+      onSeg: e => { this.pushUndo(); this.radius = this.resampleRadiusGrid(+e.target.value); this.setState({ radialSeg: +e.target.value }, () => this.rebuild()); },
+      onBrush: e => this.setState({ brush: +e.target.value }),
+      onSmooth: () => {
+        this.pushUndo();
+        const seg = this.state.radialSeg;
+        for (let c = 0; c < seg; c++) {
+          const col = this.radius.map(row => row[c]);
+          for (let r = 1; r < this.N - 1; r++) this.radius[r][c] = (col[r - 1] + col[r] * 2 + col[r + 1]) / 4;
+        }
+        this.rebuild(); this.pushLog('LAPLACIAN_SMOOTH');
+      },
+      onReset: () => { this.pushUndo(); this.radius = this.defaultRadiusGrid(this.state.radialSeg); this.rebuild(); this.pushLog('PROFILE_RESET'); },
+      onConfirm: () => this.confirm(),
+      onBack: () => this.back(),
+      onKey: e => this.setState({ key: +e.target.value }),
+      onAngle: e => this.setState({ keyAngle: +e.target.value }),
+      onFill: e => this.setState({ fill: +e.target.value }),
+      onShadow: e => this.setState({ shadow: +e.target.value }),
+      onSpec: e => { this.setState({ spec: +e.target.value }, () => this.applyMaterial(this.state.mat)); },
+      onSVG: () => this.exportSVG(), onPY: () => this.exportPY(),
+      onJSON: () => this.exportJSON(), onOBJ: () => this.exportOBJ()
+    };
+  }
+}
+</script>
+</body>
+</html>

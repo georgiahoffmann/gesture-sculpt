@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GESTURE_SCULPT</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/src/styles/global.css" />
+</head>
+
+<body>
+  <div id="app">
+    
+    <header class="header">
+      <div class="header-left">
+        <span class="brand">GESTURE_SCULPT</span>
+        <span class="subtitle">HAND-TRACKED 3D SCULPTING / v0.3</span>
+      </div>
+      <div class="header-right">
+        <span>STATE: <span id="stateReadout" class="value">IDLE</span></span>
+        <button id="debugToggle" class="btn btn-ghost btn-small">DEBUG</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="panel panel-left">
+        <div class="panel-block">
+          <div class="panel-title-row">
+            <span class="panel-title">01 · HAND_TRACKING</span>
+            <span id="trackingReadout" class="value">OFFLINE</span>
+          </div>
+          <div class="webcam-frame">
+            <video id="webcamVideo" playsinline muted></video>
+            <canvas id="webcamOverlay"></canvas>
+          </div>
+          <button id="cameraToggle" class="btn btn-primary btn-block">ATIVAR CÂMERA</button>
+          <div class="stat-grid">
+            <span>HANDS</span><span id="statHands" class="value">0</span>
+            <span>FPS</span><span id="statFps" class="value">0</span>
+          </div>
+        </div>
+
+        <div class="panel-block">
+          <div class="panel-title">02 · MESH_METRICS</div>
+          <div class="stat-grid">
+            <span>VERTICES</span><span id="statVertices" class="value">0</span>
+            <span>TRIANGLES</span><span id="statTriangles" class="value">0</span>
+            <span>SEGMENTS</span><span id="statSegments" class="value">0</span>
+          </div>
+        </div>
+
+        <div class="panel-block">
+          <div class="panel-title-row">
+            <span class="panel-title">03 · GESTURE_RECORDER</span>
+            <span id="recorderCountReadout" class="value">0</span>
+          </div>
+          <div class="button-grid-2">
+            <button id="recordToggle" class="btn btn-primary btn-small">● REC</button>
+            <button id="recordClear" class="btn btn-ghost btn-small">LIMPAR</button>
+          </div>
+          <div class="button-grid-2 button-grid-2-stacked">
+            <button id="recordExportJson" class="btn btn-outline btn-small">EXPORT JSON</button>
+            <button id="recordExportMd" class="btn btn-outline btn-small">EXPORT MD</button>
+          </div>
+          <div class="field-note">Cada pinça/gesto (engage→release) vira um episódio automaticamente enquanto REC está ativo. Faça um gesto de cada vez e anote o que fez — depois cruze com o número/hora do episódio no export.</div>
+          <div id="recorderLog" class="event-log recorder-log"></div>
+        </div>
+
+        <div class="panel-block panel-block-grow">
+          <div class="panel-title">04 · EVENT_LOG</div>
+          <div id="eventLog" class="event-log"></div>
+        </div>
+      </aside>
+
+      <main class="viewport-wrap">
+        <div id="viewport" class="viewport">
+          <canvas id="sceneCanvas"></canvas>
+          <canvas id="interactionOverlay" class="overlay-canvas"></canvas>
+          <div class="viewport-hint viewport-hint-left">
+            <div>VIEW / ISOMETRIC</div>
+            <div id="activityReadout" class="muted">STATUS: AWAIT_INPUT</div>
+          </div>
+          <div class="viewport-hint viewport-hint-right">
+            <div>FREEFORM_MESH</div>
+            <div id="segReadout" class="muted">SEG: 16</div>
+          </div>
+        </div>
+        <div class="viewport-footer">
+          <span>ARRASTAR = ESCULPIR LOCAL (ou MOVER SELEÇÃO em modo EDIT) · SHIFT+ARRASTAR = ORBITAR · ALT+ARRASTAR = PROFUNDIDADE (INFLATE/EXTRUDE/INSET) · SCROLL = ZOOM · CMD/CTRL+Z = DESFAZER · CMD/CTRL+SHIFT+Z = REFAZER</span>
+          <span>MÃO TOCA A PEÇA = ESCULPIR/EDITAR · MÃO ACIMA DO TOPO = ALTURA · MÃO NA HORIZONTAL = LARGURA (afastar/aproximar do centro) · GIRAR PUNHO FORA DA PEÇA = ROTACIONAR · MODE=EDIT troca o pincel por seleção de vértice/aresta/face</span>
+        </div>
+      </main>
+
+      <aside class="panel panel-right">
+        <div id="sculptPanel">
+          <div class="panel-block">
+            <div class="panel-title">04 · FORM_PARAMETERS</div>
+            <div class="field">
+              <div class="field-row"><span>OPERATOR</span></div>
+              <div class="button-grid-4" id="operatorGroup">
+                <button class="btn btn-outline btn-toggle" data-operator="GRAB">GRAB</button>
+                <button class="btn btn-outline btn-toggle" data-operator="INFLATE_DEFLATE">INFLATE</button>
+                <button class="btn btn-outline btn-toggle" data-operator="CREASE">CREASE</button>
+                <button class="btn btn-outline btn-toggle" data-operator="SMOOTH">SMOOTH</button>
+              </div>
+              <div class="field-note">GRAB = arrasta lateralmente · INFLATE = empurra/afunda pela normal · CREASE = converge (pontas/vincos) · SMOOTH = arredonda (curva) o que estiver sob o pincel</div>
+            </div>
+            <div class="field">
+              <div class="field-row"><span>MODE</span></div>
+              <div class="button-grid-2" id="appModeGroup">
+                <button class="btn btn-outline btn-toggle active" data-app-mode="SCULPT">SCULPT</button>
+                <button class="btn btn-outline btn-toggle" data-app-mode="EDIT">EDIT</button>
+              </div>
+              <div class="field-note">EDIT = selecionar vértice/aresta/face e mover (sem pincel)</div>
+            </div>
+            <div class="field" id="selectionModeField" hidden>
+              <div class="field-row"><span>SELECTION</span></div>
+              <div class="button-grid-4" id="selectionGroup">
+                <button class="btn btn-outline btn-toggle" data-selection="OBJECT">OBJ</button>
+                <button class="btn btn-outline btn-toggle active" data-selection="VERTEX">VERT</button>
+                <button class="btn btn-outline btn-toggle" data-selection="EDGE">EDGE</button>
+                <button class="btn btn-outline btn-toggle" data-selection="FACE">FACE</button>
+              </div>
+            </div>
+            <div class="field" id="editOperatorField" hidden>
+              <div class="field-row"><span>EDIT_OPERATOR</span></div>
+              <div class="button-grid-5" id="editOperatorGroup">
+                <button class="btn btn-outline btn-toggle active" data-edit-operator="MOVE">MOVE</button>
+                <button class="btn btn-outline btn-toggle" data-edit-operator="EXTRUDE">EXTR</button>
+                <button class="btn btn-outline btn-toggle" data-edit-operator="INSET">INSET</button>
+                <button class="btn btn-outline btn-toggle" data-edit-operator="BEVEL">BEVEL</button>
+                <button class="btn btn-outline btn-toggle" data-edit-operator="SUBDIVIDE">SUBD</button>
+              </div>
+              <div class="field-note">MOVE = mover seleção (lateral + profundidade) · EXTRUDE/INSET/SUBDIV exigem FACE (arraste em profundidade ajusta a quantidade) · BEVEL exige EDGE (arraste TRAÇANDO a aresta ajusta a quantidade)</div>
+            </div>
+            <div class="field" id="falloffField" hidden>
+              <div class="field-row"><span>FALLOFF_RADIUS</span><span id="falloffLabel" class="value">0.00</span></div>
+              <input id="falloffSlider" type="range" min="0" max="0.6" step="0.01" value="0" />
+              <div class="field-note">0 = move só a seleção exata · &gt;0 = arrasta vértices vizinhos por proporção (MOVE apenas)</div>
+            </div>
+            <div class="field-stack">
+              <div class="field">
+                <div class="field-row"><span>MESH_RESOLUTION</span><span id="resolutionLabel" class="value">16</span></div>
+                <input id="resolutionSlider" type="range" min="8" max="40" step="1" value="16" />
+                <div id="resolutionNote" class="field-note"></div>
+              </div>
+              <div class="field">
+                <div class="field-row"><span>BRUSH_RADIUS</span><span id="brushRadiusLabel" class="value">0.35</span></div>
+                <input id="brushRadiusSlider" type="range" min="0.08" max="0.9" step="0.01" value="0.35" />
+              </div>
+              <div class="field">
+                <div class="field-row"><span>BRUSH_STRENGTH</span><span id="brushStrengthLabel" class="value">1.0</span></div>
+                <input id="brushStrengthSlider" type="range" min="0.2" max="3" step="0.05" value="1" />
+              </div>
+              <div class="field">
+                <div class="field-row"><span>HARDNESS</span><span id="brushHardnessLabel" class="value">SOFT</span></div>
+                <input id="brushHardnessSlider" type="range" min="0" max="1" step="0.02" value="0.3" />
+              </div>
+              <div class="field">
+                <div class="field-row"><span>HEIGHT (manual)</span><span id="heightLabel" class="value">0%</span></div>
+                <input id="heightSlider" type="range" min="-50" max="50" step="1" value="0" />
+              </div>
+            </div>
+            <div class="button-grid-2">
+              <button id="smoothButton" class="btn btn-outline">SUAVIZAR</button>
+              <button id="resetButton" class="btn btn-outline">RESETAR</button>
+            </div>
+          </div>
+          <div class="panel-block">
+            <div class="panel-title">05 · CONFIRMAÇÃO</div>
+            <p class="panel-copy">Congele a forma esculpida para liberar materiais, luz de estúdio e exportação. A geometria exata é preservada — nada é reconstruído.</p>
+            <button id="freezeButton" class="btn btn-primary btn-block">CONGELAR FORMA →</button>
+          </div>
+        </div>
+
+        <div id="finishPanel" hidden>
+          <div class="panel-block">
+            <div class="panel-title-row">
+              <span class="panel-title">06 · MATERIAL</span>
+              <span id="materialCode" class="value"></span>
+            </div>
+            <div id="materialList" class="material-list"></div>
+          </div>
+          <div class="panel-block">
+            <div class="panel-title">07 · STUDIO_LIGHT</div>
+            <div class="field-stack">
+              <div class="field">
+                <div class="field-row"><span>KEY_INTENSIDADE</span><span id="keyIntensityLabel" class="value"></span></div>
+                <input id="keyIntensitySlider" type="range" min="0" max="4" step="0.05" value="1.7" />
+              </div>
+              <div class="field">
+                <div class="field-row"><span>KEY_AZIMUTE</span><span id="keyAzimuthLabel" class="value"></span></div>
+                <input id="keyAzimuthSlider" type="range" min="0" max="360" step="1" value="40" />
+              </div>
+              <div class="field">
+                <div class="field-row"><span>FILL_DIFUSA</span><span id="fillLabel" class="value"></span></div>
+                <input id="fillSlider" type="range" min="0" max="2" step="0.05" value="0.5" />
+              </div>
+              <div class="field">
+                <div class="field-row"><span>SOMBRA_SUAVE</span><span id="shadowLabel" class="value"></span></div>
+                <input id="shadowSlider" type="range" min="0" max="1" step="0.02" value="0.6" />
+              </div>
+              <div class="field">
+                <div class="field-row"><span>BRILHO_ESPECULAR</span><span id="specularLabel" class="value"></span></div>
+                <input id="specularSlider" type="range" min="0" max="1" step="0.02" value="0.35" />
+              </div>
+            </div>
+          </div>
+          <div class="panel-block">
+            <div class="panel-title">08 · EXPORT</div>
+            <div class="button-stack">
+              <button id="exportSvgButton" class="btn btn-outline btn-justify"><span>SALVAR SVG</span><span class="btn-hint">projeção ortográfica</span></button>
+              <button id="exportPyButton" class="btn btn-outline btn-justify"><span>SCRIPT .PY</span><span class="btn-hint">blender (vertices/faces reais)</span></button>
+              <button id="exportJsonButton" class="btn btn-outline btn-justify"><span>MALHA .JSON</span><span class="btn-hint">buffer geometry real</span></button>
+              <button id="exportObjButton" class="btn btn-outline btn-justify"><span>MALHA .OBJ</span><span class="btn-hint">cad universal</span></button>
+            </div>
+            <button id="backButton" class="btn btn-ghost btn-block btn-dashed">← VOLTAR A ESCULPIR</button>
+          </div>
+        </div>
+      </aside>
+
+      <aside id="debugPanel" class="panel panel-debug" hidden>
+        <div class="panel-block">
+          <div class="panel-title">DEBUG</div>
+          <pre id="debugOutput" class="debug-output"></pre>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
