@@ -118,3 +118,36 @@ export class RotateCommand implements ModelingCommand {
     this.target.rotation.y = this.after;
   }
 }
+
+/**
+ * Undo for a CUT (see sculpt/meshCutter.ts): restores the lower piece's
+ * positions AND heightFraction (the cut recomputes it) and detaches/
+ * reattaches the upper piece. Vertex count never changes on a cut, so no
+ * topology snapshot is needed.
+ */
+export class CutCommand implements ModelingCommand {
+  readonly type = 'CUT';
+
+  constructor(
+    private deformer: MeshDeformer,
+    private topology: MeshTopology,
+    private parent: THREE.Object3D,
+    private piece: THREE.Object3D,
+    private beforePositions: Float32Array,
+    private beforeHeightFraction: Float32Array,
+    private afterPositions: Float32Array,
+    private afterHeightFraction: Float32Array
+  ) {}
+
+  undo(): void {
+    this.deformer.restorePositions(this.beforePositions);
+    this.topology.heightFraction = this.beforeHeightFraction;
+    this.parent.remove(this.piece);
+  }
+
+  redo(): void {
+    this.deformer.restorePositions(this.afterPositions);
+    this.topology.heightFraction = this.afterHeightFraction;
+    this.parent.add(this.piece);
+  }
+}

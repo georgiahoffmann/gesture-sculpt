@@ -1,7 +1,7 @@
 import type { HandLandmarker } from '@mediapipe/tasks-vision';
 import { createHandLandmarker } from './mediapipe';
 import { HandSmoothing } from './handSmoothing';
-import { LM, distance2D, isFingerExtended, clamp01, palmCenterOf, handSpanOf, handWidthOf, gripDistanceOf, isHandHorizontal } from './landmarkUtils';
+import { LM, distance2D, isFingerExtended, clamp01, palmCenterOf, handSpanOf, handWidthOf, gripDistanceOf, isHandHorizontal, bladePoseOf, isPointingDown } from './landmarkUtils';
 import type { HandState, Handedness, Point3D } from './types';
 import { INTERACTION_CONFIG } from '../config/interactionConfig';
 
@@ -110,6 +110,8 @@ function buildHandState(handedness: Handedness, confidence: number, landmarks: P
   const gripNormalized = gripDistanceOf(landmarks) / handWidth;
   const pointing = isFingerExtended(landmarks, LM.INDEX_TIP, LM.INDEX_PIP);
   const isHorizontal = isHandHorizontal(landmarks);
+  const bladePose = bladePoseOf(landmarks, INTERACTION_CONFIG.blade);
+  const pointingDown = isPointingDown(landmarks);
 
   return {
     handedness,
@@ -127,5 +129,7 @@ function buildHandState(handedness: Handedness, confidence: number, landmarks: P
     gripNormalized,
     pointing,
     isHorizontal,
+    bladePose,
+    pointingDown,
   };
 }

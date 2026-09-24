@@ -1,4 +1,5 @@
 import type { Zone } from './spatialContext';
+import type { BladePose } from '../tracking/landmarkUtils';
 import { INTERACTION_CONFIG } from '../config/interactionConfig';
 
 export type InteractionMode =
@@ -13,10 +14,14 @@ export type InteractionMode =
   | 'HEIGHT_EDIT'
   | 'WIDTH_EDIT'
   | 'ROTATING'
+  | 'CUTTING'
   | 'TRACKING_LOST'
   | 'COOLDOWN';
 
-const ENGAGED_MODES: ReadonlySet<InteractionMode> = new Set(['SCULPTING', 'EDITING', 'HEIGHT_EDIT', 'WIDTH_EDIT', 'ROTATING']);
+const ENGAGED_MODES: ReadonlySet<InteractionMode> = new Set(['SCULPTING', 'EDITING', 'HEIGHT_EDIT', 'WIDTH_EDIT', 'ROTATING', 'CUTTING']);
+
+/** What engaged the current mode: a pinch/grip in a zone, or a blade pose (which needs no zone). */
+export type EngageSource = 'PINCH' | 'BLADE';
 
 export interface StateMachineInput {
   /** Is this pointer's hand currently tracked at all this frame? Always true for the mouse pointer while over the viewport. */
@@ -31,6 +36,12 @@ export interface StateMachineInput {
    * height and rotation act on the whole object, not the selection.
    */
   editModeActive: boolean;
+  /**
+   * Debounced blade pose (flat hand, fingers together). Engages on its own,
+   * without a pinch and regardless of zone: HORIZONTAL = CUTTING, VERTICAL =
+   * ROTATING (palm-yaw), DOWN = HEIGHT_EDIT. Always 'NONE' for the mouse.
+   */
+  blade: BladePose;
 }
 
 /**
@@ -60,6 +71,8 @@ export class InteractionStateMachine {
   private mode: InteractionMode = 'IDLE';
   private awaitingRelease = false;
   private cooldownUntil: number | null = null;
+  private source: EngageSource = 'PINCH';
+  private engagedBlade: BladePose = 'NONE';
 
   update(input: StateMachineInput, nowMs: number): InteractionMode {
     if (!input.present) {
@@ -84,9 +97,13 @@ export class InteractionStateMachine {
       // actual release-then-press edge is observed, not just "not pinching now".
     }
 
+    const wantsEngage = input.isPinching || input.blade !== 'NONE';
+
     if (ENGAGED_MODES.has(this.mode)) {
-      // LOCKED: only a release can change this, regardless of zone or pinch wobble.
-      if (!input.isPinching) {
+      // LOCKED: only a release can change this, regardless of zone or pinch wobble. A
+      // blade-engaged mode releases when THAT blade pose ends, a pinch-engaged one on unpinch.
+      const held = this.source === 'BLADE' ? input.blade === this.engagedBlade : input.isPinching;
+      if (!held) {
         this.awaitingRelease = true;
         this.cooldownUntil = nowMs + INTERACTION_CONFIG.cooldown.durationMs;
         this.mode = 'COOLDOWN';
@@ -95,12 +112,21 @@ export class InteractionStateMachine {
     }
 
     if (this.awaitingRelease) {
-      if (!input.isPinching) this.awaitingRelease = false;
+      if (!wantsEngage) this.awaitingRelease = false;
       this.mode = hoverModeFor(input.zone, input.editModeActive);
       return this.mode;
     }
 
+    if (input.blade !== 'NONE') {
+      this.source = 'BLADE';
+      this.engagedBlade = input.blade;
+      this.mode = input.blade === 'HORIZONTAL' ? 'CUTTING' : input.blade === 'VERTICAL' ? 'ROTATING' : 'HEIGHT_EDIT';
+      return this.mode;
+    }
+
     if (input.isPinching) {
+      this.source = 'PINCH';
+      this.engagedBlade = 'NONE';
       this.mode = engagedModeFor(input.zone, input.editModeActive);
       return this.mode;
     }
@@ -113,10 +139,17 @@ export class InteractionStateMachine {
     return this.mode;
   }
 
+  /** What engaged the current (or most recent) engaged mode — main.ts uses it to pick wrist-roll vs palm-yaw rotation. */
+  get engageSource(): EngageSource {
+    return this.source;
+  }
+
   reset(): void {
     this.mode = 'IDLE';
     this.awaitingRelease = false;
     this.cooldownUntil = null;
+    this.source = 'PINCH';
+    this.engagedBlade = 'NONE';
   }
 }
 

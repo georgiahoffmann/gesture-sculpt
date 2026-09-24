@@ -160,6 +160,56 @@ export const INTERACTION_CONFIG = {
     edgePickRadius: 0.12,
   },
 
+  /**
+   * BLADE: flat hand, four fingers extended and held together (see
+   * landmarkUtils.bladePoseOf). HORIZONTAL = cut, VERTICAL = rotate, DOWN =
+   * height pull. Ratios are 3D and normalized by the index-to-pinky knuckle
+   * width. Thresholds were checked against MediaPipe runs on the recorded
+   * reference videos (gestures-ref/).
+   */
+  blade: {
+    /** A finger counts as extended when wrist->tip is at least this multiple of wrist->PIP. */
+    extendRatio: 1.1,
+    /** Index-tip-to-pinky-tip distance / knuckle width must stay BELOW this (fingers together, not spread). */
+    togetherRatio: 1.5,
+    /** Thumb-tip-to-index-tip distance / knuckle width must stay ABOVE this (not a pinch). */
+    minThumbGapRatio: 0.5,
+    /** How much one image axis must dominate the other (wrist->middle knuckle) to call the hand horizontal/vertical. */
+    orientationDominance: 1.2,
+    /**
+     * Consecutive frames HORIZONTAL/VERTICAL must hold before engaging — long enough that a hand
+     * briefly passing through an upright flat pose (e.g. rising to do the height gesture) doesn't
+     * start a rotation. Measured on the reference videos: those transients last ~4 frames at 30fps.
+     */
+    confirmFrames: 9,
+    /** DOWN ("beak" height pull) is unambiguous and has to win the race against the ordinary pinch detector (3 frames), so it confirms faster. */
+    downConfirmFrames: 3,
+    /** HORIZONTAL (cut) is a fast sweep — at 9 frames the reference sweep was already over before it confirmed. */
+    horizontalConfirmFrames: 4,
+    /**
+     * A fast sweep blurs the hand and MediaPipe drops it for a few frames (up to ~330ms in the
+     * reference video). A blade-engaged mode survives a loss this short instead of going to
+     * TRACKING_LOST, and the pose debounce isn't reset by it.
+     */
+    trackingGraceMs: 400,
+    /**
+     * Consecutive frames the pose must be LOST before it releases. In the rotate reference video the
+     * back of the hand turns edge-on for ~0.4s and ring/pinky get occluded — this must bridge that.
+     */
+    releaseFrames: 16,
+  },
+
+  cut: {
+    /** Fraction of the object's width (along the screen-horizontal axis) the blade must sweep across for the cut to happen. */
+    sweepCoverage: 0.8,
+    /** The cut height is kept at least this fraction of the object's height away from its bottom/top, so neither piece is degenerate. */
+    edgeMargin: 0.06,
+    /** Bins the hand's path is averaged into along the sweep — more bins = the cut follows the hand more closely, but noisier. */
+    pathBins: 16,
+    /** How far (object-local units) the upper piece is lifted off the lower one after the cut, so the split is visible. */
+    separationGap: 0.12,
+  },
+
   strokeHistory: {
     windowMs: 500,
     maxSamples: 40,
@@ -169,6 +219,10 @@ export const INTERACTION_CONFIG = {
     sensitivity: 1,
     /** Radians of wrist-roll delta ignored before rotation starts applying (dead zone). */
     deadZone: 0.02,
+    /** Vertical-blade rotation: object turns this many radians per radian the palm turns. Flip the sign if it feels mirrored. */
+    palmYawSensitivity: 1,
+    /** Radians of accumulated palm yaw ignored before vertical-blade rotation applies. */
+    palmYawDeadZone: 0.06,
   },
 
   height: {

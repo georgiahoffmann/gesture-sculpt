@@ -1,3 +1,5 @@
+import type { BladePose } from './landmarkUtils';
+
 /**
  * Our own normalized hand representation, decoupled from MediaPipe's wire format.
  * The tracking layer is the only place that should ever import `@mediapipe/tasks-vision`
@@ -38,4 +40,8 @@ export interface HandState {
   pointing: boolean;
   /** Wrist->middle-knuckle vector is more horizontal than vertical in image space — the WIDTH zone's trigger (Phase 4), see landmarkUtils.isHandHorizontal. */
   isHorizontal: boolean;
+  /** Raw per-frame blade pose (flat hand, fingers together) — debounced by gestures/bladeDetector.ts before anything acts on it. */
+  bladePose: BladePose;
+  /** Index + thumb tips hang below the knuckles — the "pull from above" HEIGHT pose, see landmarkUtils.isPointingDown. */
+  pointingDown: boolean;
 }

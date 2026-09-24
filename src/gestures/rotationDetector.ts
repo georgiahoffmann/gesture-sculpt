@@ -37,3 +37,47 @@ export class RotationDetector {
     this.referenceAngle = null;
   }
 }
+
+/**
+ * Palm yaw — the recorded vertical-blade ROTATE gesture: the flat hand stays
+ * upright and turns around its own vertical axis (palm to camera -> edge-on
+ * -> back of hand). Measured from the index->pinky knuckle vector in the
+ * horizontal (x, z) plane, converted to the viewer's frame (x mirrored like
+ * the webcam preview, z flipped so "toward the camera" is +Z like the
+ * scene), so a positive delta turns the object the same way the palm turned
+ * when seen from above.
+ */
+export function computePalmYaw(hand: HandState): number {
+  const a = hand.landmarks[LM.INDEX_MCP];
+  const b = hand.landmarks[LM.PINKY_MCP];
+  return Math.atan2(-(b.x - a.x), -(b.z - a.z));
+}
+
+/**
+ * Same begin/delta/end shape as RotationDetector, but ACCUMULATES frame-to-
+ * frame deltas instead of comparing against the start angle — a full palm
+ * turn goes well past 180°, where a single start-vs-now difference would
+ * wrap around and snap the object backwards.
+ */
+export class PalmYawDetector {
+  private lastAngle: number | null = null;
+  private accumulated = 0;
+
+  begin(hand: HandState): void {
+    this.lastAngle = computePalmYaw(hand);
+    this.accumulated = 0;
+  }
+
+  delta(hand: HandState): number {
+    if (this.lastAngle == null) return 0;
+    const angle = computePalmYaw(hand);
+    this.accumulated += shortestAngleDelta(angle, this.lastAngle);
+    this.lastAngle = angle;
+    return this.accumulated;
+  }
+
+  end(): void {
+    this.lastAngle = null;
+    this.accumulated = 0;
+  }
+}

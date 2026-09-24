@@ -185,6 +185,8 @@ function zoneColor(mode: InteractionMode): string {
     case 'ROTATING':
     case 'HOVER_ROTATE':
       return 'rgba(255,138,26,0.85)';
+    case 'CUTTING':
+      return 'rgba(255,45,122,0.9)';
     default:
       return 'rgba(26,26,26,0.5)';
   }

@@ -68,6 +68,72 @@ export function isHandHorizontal(landmarks: Point3D[]): boolean {
   return Math.abs(middleMcp.x - wrist.x) > Math.abs(middleMcp.y - wrist.y);
 }
 
+export type BladePose = 'NONE' | 'HORIZONTAL' | 'VERTICAL' | 'DOWN';
+
+export interface BladeThresholds {
+  extendRatio: number;
+  togetherRatio: number;
+  minThumbGapRatio: number;
+  orientationDominance: number;
+}
+
+/**
+ * Flat-hand poses from the recorded reference gestures — all four non-thumb
+ * fingers extended AND held together (not spread). Which way the FINGERS
+ * point picks the tool:
+ *
+ *   HORIZONTAL (fingers sideways, palm down)  = cut
+ *   VERTICAL   (fingers up)                   = rotate by turning the palm
+ *   DOWN       (fingers hanging down, "beak") = pull height from above
+ *
+ * HORIZONTAL/VERTICAL also require the thumb away from the index tip (not a
+ * pinch); DOWN does not — in the recorded height gesture the thumb touches
+ * the fingertips, and that pinch distance flickers across the PINCH
+ * threshold mid-pull, which is why a plain pinch was an unreliable trigger
+ * for it. Finger direction (knuckle->tip), not wrist->knuckle, is what
+ * matters: the "beak" bends the wrist so wrist->knuckle reads horizontal.
+ * Distances are 3D and normalized by the knuckle width so the test survives
+ * the palm turning edge-on to the camera mid-rotation.
+ */
+export function bladePoseOf(landmarks: Point3D[], t: BladeThresholds): BladePose {
+  const wrist = landmarks[LM.WRIST];
+  const fingers: Array<[number, number, number]> = [
+    [LM.INDEX_TIP, LM.INDEX_PIP, LM.INDEX_MCP],
+    [LM.MIDDLE_TIP, LM.MIDDLE_PIP, LM.MIDDLE_MCP],
+    [LM.RING_TIP, LM.RING_PIP, LM.RING_MCP],
+    [LM.PINKY_TIP, LM.PINKY_PIP, LM.PINKY_MCP],
+  ];
+  let dx = 0;
+  let dy = 0;
+  for (const [tip, pip, mcp] of fingers) {
+    if (distance3D(wrist, landmarks[tip]) < distance3D(wrist, landmarks[pip]) * t.extendRatio) return 'NONE';
+    dx += landmarks[tip].x - landmarks[mcp].x;
+    dy += landmarks[tip].y - landmarks[mcp].y;
+  }
+  const knuckleWidth = Math.max(1e-4, distance3D(landmarks[LM.INDEX_MCP], landmarks[LM.PINKY_MCP]));
+  if (distance3D(landmarks[LM.INDEX_TIP], landmarks[LM.PINKY_TIP]) / knuckleWidth > t.togetherRatio) return 'NONE';
+
+  // Image y grows downward: fingers pointing up is a negative dy.
+  if (dy > Math.abs(dx) * t.orientationDominance) return 'DOWN';
+
+  if (distance3D(landmarks[LM.THUMB_TIP], landmarks[LM.INDEX_TIP]) / knuckleWidth < t.minThumbGapRatio) return 'NONE';
+  if (Math.abs(dx) > Math.abs(dy) * t.orientationDominance) return 'HORIZONTAL';
+  if (-dy > Math.abs(dx) * t.orientationDominance) return 'VERTICAL';
+  return 'NONE';
+}
+
+/**
+ * "Pulling a thread from above" (the recorded HEIGHT gesture): index and
+ * thumb tips both hang BELOW the index knuckle in image space. That pose
+ * bends the wrist so the wrist->middle-knuckle vector reads as horizontal —
+ * which is exactly why it used to fall into the WIDTH zone instead of
+ * HEIGHT. spatialContext checks this before orientation.
+ */
+export function isPointingDown(landmarks: Point3D[]): boolean {
+  const knuckleY = landmarks[LM.INDEX_MCP].y;
+  return landmarks[LM.INDEX_TIP].y > knuckleY && landmarks[LM.THUMB_TIP].y > knuckleY;
+}
+
 export function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
 }
