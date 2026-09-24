@@ -8,11 +8,15 @@ import { InteractionStateMachine, type InteractionMode } from './interaction/int
 import { TransformEngine } from './interaction/transformEngine';
 import { classifyZone } from './interaction/spatialContext';
 import { GestureClassifier, type HandGesture } from './gestures/gestureClassifier';
-import { RotationDetector } from './gestures/rotationDetector';
+import { RotationDetector, PalmYawDetector } from './gestures/rotationDetector';
+import { BladeDetector } from './gestures/bladeDetector';
+import type { BladePose } from './tracking/landmarkUtils';
+import { CutController } from './interaction/cutController';
+import { cutObject, isCutPiece, setCutPieceSculptMode } from './sculpt/meshCutter';
 import { StrokeDeformer, type StrokeUpdateResult } from './sculpt/strokeDeformer';
 import { MeshDeformer } from './sculpt/meshDeformer';
 import { CommandHistory } from './modeling/commandHistory';
-import { MeshEditCommand, RotateCommand } from './modeling/commands';
+import { CutCommand, MeshEditCommand, RotateCommand } from './modeling/commands';
 import { EditableMesh } from './modeling/editableMesh';
 import { SelectionManager, type SelectionMode } from './modeling/selectionManager';
 import { EditManipulator, type EditUpdateResult } from './modeling/editManipulator';
@@ -55,6 +59,11 @@ interface PointerRuntime {
   heightManipulator: HeightManipulator;
   widthManipulator: WidthManipulator;
   rotationDetector: RotationDetector;
+  /** Vertical-blade rotation (palm turning around its own vertical axis) — used instead of rotationDetector when ROTATING was engaged by a blade, not a pinch. */
+  palmYawDetector: PalmYawDetector;
+  cutController: CutController;
+  /** Last frame this pointer was tracked — for the blade tracking-grace window. */
+  lastSeenMs: number;
   rotationBaselineY: number;
   previousMode: InteractionMode;
   /** This pointer's gesture as of the last frame it was present — read by applyModeTransition at release time, since the classifier has usually already returned to NONE by then. */
@@ -97,6 +106,9 @@ function main(): void {
         heightManipulator: new HeightManipulator(),
         widthManipulator: new WidthManipulator(),
         rotationDetector: new RotationDetector(),
+        palmYawDetector: new PalmYawDetector(),
+        cutController: new CutController(),
+        lastSeenMs: 0,
         rotationBaselineY: 0,
         previousMode: 'IDLE',
         activeGesture: 'NONE',
@@ -108,6 +120,19 @@ function main(): void {
   const handProjector = new HandProjector();
   const raycaster = new RaycasterService();
   const gestureClassifier = new GestureClassifier();
+  const bladeDetector = new BladeDetector();
+
+  // Cut-line preview: the hand's path across the object while CUTTING, drawn on top of everything.
+  const cutPreviewMaterial = new THREE.LineBasicMaterial({ color: 0xff2d7a, depthTest: false, transparent: true });
+  const cutPreviewLine = new THREE.Line(new THREE.BufferGeometry(), cutPreviewMaterial);
+  cutPreviewLine.renderOrder = 10;
+  cutPreviewLine.frustumCulled = false;
+  cutPreviewLine.visible = false;
+  scene.add(cutPreviewLine);
+
+  const setCutPiecesSculptMode = (sculpting: boolean) => {
+    for (const child of object.group.children) if (isCutPiece(child)) setCutPieceSculptMode(child, sculpting);
+  };
   const tracker = new HandTracker(video);
   const eventLog = new EventLog(required('eventLog'));
   eventLog.push('SESSION_INIT');
@@ -144,6 +169,7 @@ function main(): void {
     onFreeze: () => {
       formFrozen = true;
       object.setSculptMode(false);
+      setCutPiecesSculptMode(false);
       applyFinishMaterial();
       rightPanel.setMode('FINISH');
       eventLog.push('FORM_FROZEN → FINISH');
@@ -151,6 +177,7 @@ function main(): void {
     onBack: () => {
       formFrozen = false;
       object.setSculptMode(true);
+      setCutPiecesSculptMode(true);
       rightPanel.setMode('SCULPT');
       eventLog.push('RETURN_TO_SCULPT');
     },
@@ -391,6 +418,7 @@ function main(): void {
     const centerNdcThisFrame = formFrozen ? null : computeCenterNdc(camera);
     const brush = rightPanel.brushSettings;
     const results: FrameResult[] = [];
+    let cutPreview: THREE.Vector3[] | null = null;
 
     for (const id of POINTER_IDS) {
       const runtime = pointerRuntimes.get(id)!;
@@ -402,13 +430,26 @@ function main(): void {
       if (id === 'Mouse' && mouseOrbiting) continue;
 
       const present = id === 'Mouse' ? mouseNdc != null : hand != null;
+      if (present) runtime.lastSeenMs = nowMs;
+
+      // A blade gesture (cut sweep especially) moves fast enough that MediaPipe drops the hand for
+      // a few frames — hold the engaged mode through a short gap instead of going TRACKING_LOST.
+      if (
+        !present &&
+        runtime.stateMachine.engageSource === 'BLADE' &&
+        (runtime.previousMode === 'CUTTING' || runtime.previousMode === 'ROTATING' || runtime.previousMode === 'HEIGHT_EDIT') &&
+        nowMs - runtime.lastSeenMs < INTERACTION_CONFIG.blade.trackingGraceMs
+      ) {
+        results.push({ id, hand: null, present: false, mode: runtime.previousMode, hit: null, stroke: null, edit: null });
+        continue;
+      }
 
       if (!present) {
         if (hand == null && id !== 'Mouse') {
           handProjector.reset(id);
           gestureClassifier.reset(id as Handedness);
         }
-        const mode = runtime.stateMachine.update({ present: false, isPinching: false, zone: 'ROTATE', editModeActive }, nowMs);
+        const mode = runtime.stateMachine.update({ present: false, isPinching: false, zone: 'ROTATE', editModeActive, blade: 'NONE' }, nowMs);
         applyModeTransition(id, runtime, mode, null, null, null, null, null, nowMs, 'NONE');
         results.push({ id, hand: null, present: false, mode, hit: null, stroke: null, edit: null });
         continue;
@@ -421,6 +462,9 @@ function main(): void {
       // hands go through GestureClassifier, which tells a full 5-finger grip apart from an
       // index+thumb pinch (see gestures/gestureClassifier.ts — "pegada grande", Phase 4).
       let gesture: HandGesture = 'NONE';
+      // Flat-hand blade (cut / palm-yaw rotate) — hand-only, and never while a pinch/grip is on.
+      let blade: BladePose = 'NONE';
+      let palmNdc: THREE.Vector2 | null = null;
 
       if (id === 'Mouse') {
         cursorNdc = mouseNdc!;
@@ -435,14 +479,24 @@ function main(): void {
         cursorNdc = projected.ndc;
         depthDelta = projected.depthDelta;
         gesture = gestureClassifier.update(hand!);
+        const confirmedBlade = bladeDetector.update(hand!, nowMs);
+        // The height "beak" has the thumb on the fingertips, so the pinch detector flickers on it —
+        // while the raw pose reads DOWN, the pinch is ignored and the DOWN pose drives HEIGHT_EDIT.
+        if (hand!.bladePose === 'DOWN' || confirmedBlade === 'DOWN') gesture = 'NONE';
         isPinching = gesture !== 'NONE';
+        blade = isPinching ? 'NONE' : confirmedBlade;
+        // No cutting a frozen (finished) form.
+        if (blade === 'HORIZONTAL' && formFrozen) blade = 'NONE';
+        // The cut line follows the middle of the hand, not the index tip at the end of the blade.
+        palmNdc = new THREE.Vector2((1 - hand!.palmCenter.x) * 2 - 1, 1 - hand!.palmCenter.y * 2);
       }
 
       // Mouse has no fingers to orient — WIDTH is a hand-only zone.
       const isHorizontal = id !== 'Mouse' && (hand?.isHorizontal ?? false);
-      const hit = formFrozen || isHorizontal ? null : raycaster.pickSurface(cursorNdc.x, cursorNdc.y, camera, object.shadeMesh);
-      const { zone } = classifyZone(cursorNdc, hit, topNdc, isHorizontal);
-      const mode = runtime.stateMachine.update({ present: true, isPinching, zone, editModeActive }, nowMs);
+      const pointingDown = id !== 'Mouse' && (hand?.pointingDown ?? false);
+      const hit = formFrozen || isHorizontal || blade !== 'NONE' ? null : raycaster.pickSurface(cursorNdc.x, cursorNdc.y, camera, object.shadeMesh);
+      const { zone } = classifyZone(cursorNdc, hit, topNdc, isHorizontal, pointingDown);
+      const mode = runtime.stateMachine.update({ present: true, isPinching, zone, editModeActive, blade }, nowMs);
 
       applyModeTransition(id, runtime, mode, hand, cursorNdc, centerNdcThisFrame, transformEngine.getRotationY(), hit, nowMs, runtime.activeGesture);
       runtime.activeGesture = gesture;
@@ -484,9 +538,43 @@ function main(): void {
           break;
         }
         case 'ROTATING': {
-          const delta = runtime.rotationDetector.delta(hand!);
-          if (Math.abs(delta) > INTERACTION_CONFIG.rotation.deadZone) {
-            transformEngine.setRotationY(runtime.rotationBaselineY + delta * INTERACTION_CONFIG.rotation.sensitivity);
+          const rot = INTERACTION_CONFIG.rotation;
+          if (runtime.stateMachine.engageSource === 'BLADE') {
+            const delta = runtime.palmYawDetector.delta(hand!);
+            if (Math.abs(delta) > rot.palmYawDeadZone) {
+              transformEngine.setRotationY(runtime.rotationBaselineY + delta * rot.palmYawSensitivity);
+            }
+          } else {
+            const delta = runtime.rotationDetector.delta(hand!);
+            if (Math.abs(delta) > rot.deadZone) {
+              transformEngine.setRotationY(runtime.rotationBaselineY + delta * rot.sensitivity);
+            }
+          }
+          break;
+        }
+        case 'CUTTING': {
+          if (!palmNdc) break;
+          const cut = runtime.cutController.update(palmNdc, camera, object);
+          cutPreview = cut.preview;
+          if (cut.ready) {
+            const controller = runtime.cutController;
+            const cutHeight = controller.buildCutFunction();
+            const result = cutObject(object, (v) => cutHeight(controller.sOfLocal(v, object)), INTERACTION_CONFIG.cut.separationGap);
+            history.push(
+              new CutCommand(
+                deformer,
+                object.topology,
+                object.group,
+                result.piece,
+                result.beforePositions,
+                result.beforeHeightFraction,
+                result.afterPositions,
+                result.afterHeightFraction
+              )
+            );
+            controller.markDone();
+            hasSculpted = true;
+            eventLog.push('CUT');
           }
           break;
         }
@@ -497,6 +585,9 @@ function main(): void {
       const showHit = hit && (mode === 'SCULPTING' || mode === 'HOVER_MESH' || mode === 'EDITING' || mode === 'HOVER_EDIT');
       results.push({ id, hand, present: true, mode, hit: showHit ? hit : null, stroke, edit });
     }
+
+    cutPreviewLine.visible = cutPreview != null && cutPreview.length > 1;
+    if (cutPreviewLine.visible) cutPreviewLine.geometry.setFromPoints(cutPreview!);
 
     if (hasSculpted) rightPanel.lockResolution(true);
     syncPointsGeometry(object);
@@ -589,14 +680,21 @@ function main(): void {
       runtime.widthManipulator.end();
       recorder.endEpisode(id, nowMs, 'WIDTH_EDIT');
     }
+    if (runtime.previousMode === 'CUTTING') {
+      const label = runtime.cutController.completed ? 'CUT' : 'CUT · incompleto';
+      runtime.cutController.end();
+      recorder.endEpisode(id, nowMs, label);
+    }
     if (runtime.previousMode === 'ROTATING') {
       runtime.rotationDetector.end();
+      runtime.palmYawDetector.end();
       const after = currentRotationY ?? transformEngine.getRotationY();
       if (after !== runtime.rotationBaselineY) {
         history.push(new RotateCommand(object.group, runtime.rotationBaselineY, after));
       }
       const deltaDeg = ((after - runtime.rotationBaselineY) * 180) / Math.PI;
-      recorder.endEpisode(id, nowMs, `ROTATE · Δ=${deltaDeg.toFixed(1)}°`);
+      const via = runtime.stateMachine.engageSource === 'BLADE' ? ' · palma' : '';
+      recorder.endEpisode(id, nowMs, `ROTATE${via} · Δ=${deltaDeg.toFixed(1)}°`);
     }
 
     if (mode === 'SCULPTING') {
@@ -616,8 +714,13 @@ function main(): void {
       runtime.widthManipulator.begin(cursorNdc, centerNdc);
       recorder.beginEpisode(id, mode, nowMs);
     }
+    if (mode === 'CUTTING') {
+      runtime.cutController.begin(cameraRig.getCamera(), object);
+      recorder.beginEpisode(id, mode, nowMs);
+    }
     if (mode === 'ROTATING' && hand && currentRotationY != null) {
-      runtime.rotationDetector.begin(hand);
+      if (runtime.stateMachine.engageSource === 'BLADE') runtime.palmYawDetector.begin(hand);
+      else runtime.rotationDetector.begin(hand);
       runtime.rotationBaselineY = currentRotationY;
       recorder.beginEpisode(id, mode, nowMs);
     }
@@ -635,6 +738,7 @@ function dominantMode(results: Array<{ mode: InteractionMode }>): string {
     'HEIGHT_EDIT',
     'WIDTH_EDIT',
     'ROTATING',
+    'CUTTING',
     'TRACKING_LOST',
     'COOLDOWN',
     'HOVER_MESH',
@@ -661,6 +765,7 @@ function contextualLabel(
   if (results.some((r) => r.mode === 'HEIGHT_EDIT')) return 'HEIGHT · ↕';
   if (results.some((r) => r.mode === 'WIDTH_EDIT')) return 'WIDTH · ↔';
   if (results.some((r) => r.mode === 'ROTATING')) return 'ROTATE · ↻';
+  if (results.some((r) => r.mode === 'CUTTING')) return 'CUT · ✂';
   if (results.some((r) => r.mode === 'TRACKING_LOST')) return 'TRACKING LOST';
   if (results.some((r) => r.mode === 'COOLDOWN')) return 'COOLDOWN';
   if (results.some((r) => r.mode === 'HOVER_MESH')) return 'HOVER · MESH';

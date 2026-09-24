@@ -51,6 +51,23 @@ cycle, multiple pointers (both hands + mouse) can be open at once.
 | `HEIGHT_EDIT` | HEIGHT | `HEIGHT_EDIT` | Stretches/compresses the object from its base along Y. |
 | `WIDTH_EDIT` | WIDTH | `WIDTH_EDIT` | Scales the object's whole X/Z footprint around its own center. |
 | `ROTATING` | ROTATE | `ROTATE · Δ=N°` | Spins the object around Y by N degrees (wrist roll). |
+| `ROTATING` | any (vertical blade) | `ROTATE · palma · Δ=N°` | Spins the object around Y following the flat upright palm turning around its own vertical axis. |
+| `HEIGHT_EDIT` | any ("beak" down) | `HEIGHT_EDIT` | Same height stretch, engaged by the pull-from-above pose instead of a pinch. |
+| `CUTTING` | any (horizontal blade) | `CUT` / `CUT · incompleto` | Splits the object along the hand's path once the sweep crosses ≥80% of its width. |
+
+**Hand poses** (`tracking/landmarkUtils.ts` `bladePoseOf`, debounced by
+`gestures/bladeDetector.ts`): four fingers extended and held together.
+The finger direction (knuckle→tip) picks the tool, and a pose engages on
+its own, with no pinch and in any zone:
+
+| Pose | Fingers point | Engages |
+|---|---|---|
+| `HORIZONTAL` blade | sideways, palm down, thumb away | `CUTTING` |
+| `VERTICAL` blade | up, thumb away | `ROTATING` (palm yaw) |
+| `DOWN` "beak" | down, thumb on the fingertips | `HEIGHT_EDIT` (overrides the pinch detector, which flickers on this pose) |
+
+Thresholds were checked by running MediaPipe on the recorded reference
+videos (`gestures-ref/`, gitignored).
 
 **PINCH vs GRIP** (Phase 4 — see `gestures/gestureClassifier.ts`): every ENGAGE used to mean one gesture (index+thumb pinch). Now a real hand is classified as one of `PINCH` (index+thumb close — no condition on the other fingers, same as before Phase 4) or `GRIP` (all four non-thumb fingers tightly converged — a real full grasp), mutually exclusive, GRIP checked first. Both still count as ENGAGE for zone purposes; the gesture type only changes what happens once SCULPTING starts (GRIP = the region scale-from-center below; every other mode/zone treats PINCH and GRIP identically). Mouse has no fingers, so it's always PINCH.
 
@@ -77,44 +94,20 @@ gesture should collapse into one row once the mapping is confirmed).
 | Curved hand trace along an edge | MESH, EDIT mode, EDGE selection | `EDITING` · `BEVEL` | Rounds that edge; amount grows the farther the hand traces along it, shrinks on backtrack. | Edge picking is intentionally forgiving (~20% wider than a plain per-face pick) since a curved trace won't land pixel-perfect on the edge line. Reported as "not possible" — most likely the same GestureClassifier dead zone that broke ROTATE (ENGAGE itself wasn't firing), now fixed; needs re-confirming live. |
 | Curved hand trace anywhere on the surface | MESH, SCULPT mode, `SMOOTH` operator selected | `SCULPTING` · `SMOOTH` | Rounds off whatever's under the brush, live. | Selected via the OPERATOR row like GRAB/INFLATE/CREASE, not auto-detected from the trace shape — flagged as a scope simplification. Also likely affected by the same dead-zone bug; needs re-confirming live, and confirming whether manual operator selection is acceptable or auto-detection is actually needed. |
 
-See **Deferred** below for `cortar forma` (object cut/split), which this
-phase intentionally does not implement.
+| Flat hand, fingers together and pointing down ("beak", thumb on the fingertips), raised above the head and pulled up | any | `HEIGHT_EDIT` (DOWN pose) | Object grows taller from the base. | Reference: `Movie on 24-09-26 at 08.57 #2.mov`. Used to land in WIDTH: the bent wrist makes wrist→knuckle read horizontal, and the pinch distance flickered 0.16–0.97 mid-pull. Now a pose of its own, confirmed across the whole recorded pull. |
+| Flat upright hand, fingers together, turning around its vertical axis (palm → edge → back of hand) | any | `ROTATING` (VERTICAL blade) | Object turns around Y with the palm. | Reference: `Movie on 24-09-26 at 08.57 #3.mov`. Accumulates frame-to-frame yaw, so turns past 180° don't wrap. The ~0.4s edge-on stretch (ring/pinky occluded) is bridged by `blade.releaseFrames`. Direction untested live: flip `rotation.palmYawSensitivity` if it feels mirrored. |
+| Flat horizontal hand, palm down, fingers together, swept across the object | any | `CUTTING` (HORIZONTAL blade) | Object splits along the hand's path. The lower piece stays sculptable and the upper one is lifted off as a separate piece. Undoable. | Reference: `Movie on 24-09-26 at 08.57.mov`. See **Cut** below. |
 
-## Deferred
+## Cut
 
-**`cortar forma`** (cut shape): a flat, straight-fingered hand swiping a
-horizontal or vertical line across the object should cut it there; a
-follow-up "push" gesture should then drag the cut-off piece away from or
-back into the rest, as a genuinely separate, independently transformable
-piece — confirmed with the user as the real split, not a connected-mesh
-visual approximation. Not built in Phase 4: the whole app currently assumes
-exactly one `SculptableObject` (raycasting, undo, export, `EditableMesh` all
-built around a singleton) — supporting a second independently-movable piece
-needs that assumption unwound first (multiple objects in the scene, per-
-object selection/raycasting, a real mesh-bisect algorithm that partitions
-triangles crossing the cut plane). Sized similarly to, or larger than, the
-entire rest of this phase — needs its own phase.
-
-Recorded reference (`Screen Recording 2026-09-16 at 17.54.56.mov`, screen
-capture, no camera view of the hand itself — read from the app's own
-state/overlay readouts frame-by-frame, no video playback available in this
-environment): the demonstrated motion is (1) hand reaches toward the object
-with fingers spread (briefly registers `HOVER · MESH`), (2) hand flattens —
-fingers straight and together, held roughly horizontal near shoulder/head
-height — and sweeps across in front of the object at around its vertical
-midpoint, (3) hand continues moving away to the side, fingers no longer
-flat (`HOVER · ROTATE ZONE`). Matches the user's own description: straight/
-flat fingers, horizontal orientation, traced across the object.
-
-**Conflict to resolve when this gets built**: step (2) of that exact
-motion — hand flattened to horizontal, in front of the object — is now
-*also* exactly what triggers Phase 4's WIDTH zone (`isHandHorizontal` in
-`tracking/landmarkUtils.ts`), confirmed by this same recording: the app
-(already running Phase 4 at capture time) read that segment as
-`HOVER · WIDTH ZONE`. A flat horizontal hand alone can't disambiguate
-"resize width" from "cut" — whatever implements `cortar forma` will need a
-second signal on top of orientation, e.g. the hand's MOTION (a fast lateral
-swipe vs. a held approach/retreat from center), position (near the object's
-silhouette vs. hovering at its center), or a distinct hand shape (fingers
-fully together/blade-like vs. just "flatter than usual"). Not resolved
-here — flagging it now so it isn't rediscovered the hard way later.
+The implementation lives in `interaction/cutController.ts` and `sculpt/meshCutter.ts`.
+While `CUTTING`, the palm center is projected onto a vertical plane
+through the object facing the camera. Samples inside the object's height
+are binned along the sweep into a cut-height curve, so a tilted or wavy
+sweep cuts along that path. Each piece is the full mesh with its vertices
+clamped to its side of that surface. Both pieces stay watertight and keep
+the quad topology, and only the lower one stays sculptable. The upper piece
+is a child of the object group: it rotates with the object and shares its
+materials. It is not yet independently movable, sculptable or exported,
+and there is no follow-up "push" gesture yet. The sweep survives MediaPipe
+dropping the blurred hand for up to `blade.trackingGraceMs`.

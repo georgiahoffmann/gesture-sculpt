@@ -16,7 +16,8 @@ export interface SpatialContext {
  * something different depending only on which zone it happens in (see
  * InteractionStateMachine).
  *
- *   hand held horizontally          -> WIDTH  (checked FIRST — see below)
+ *   pinch hanging down, above top   -> HEIGHT (checked FIRST — see classifyZone)
+ *   hand held horizontally          -> WIDTH  (see below)
  *   near the object's top           -> HEIGHT
  *   raycast hits the mesh           -> MESH   (sculpt)
  *   anywhere else (off the piece)   -> ROTATE (the brief's explicit fallback —
@@ -46,7 +47,19 @@ export interface SpatialContext {
  * horizontally, it's WIDTH regardless of where it is, mouse pointer
  * (`isHandHorizontal` always false — no fingers to orient) excluded.
  */
-export function classifyZone(cursorNdc: THREE.Vector2, hit: SurfaceHit | null, topZoneNdc: THREE.Vector2 | null, isHandHorizontal: boolean): SpatialContext {
+export function classifyZone(
+  cursorNdc: THREE.Vector2,
+  hit: SurfaceHit | null,
+  topZoneNdc: THREE.Vector2 | null,
+  isHandHorizontal: boolean,
+  isPointingDown: boolean
+): SpatialContext {
+  // "Pull a thread from above" (recorded HEIGHT gesture): fingers hanging down, hand at or
+  // above the object's top. Checked BEFORE orientation — that pose bends the wrist so the
+  // hand also reads as horizontal, which used to send it to WIDTH and resize the footprint.
+  if (isPointingDown && topZoneNdc && cursorNdc.y > topZoneNdc.y - INTERACTION_CONFIG.height.topZoneRadius) {
+    return { zone: 'HEIGHT', hit: null };
+  }
   if (isHandHorizontal) return { zone: 'WIDTH', hit: null };
   if (topZoneNdc && cursorNdc.distanceTo(topZoneNdc) < INTERACTION_CONFIG.height.topZoneRadius) {
     return { zone: 'HEIGHT', hit: null };
