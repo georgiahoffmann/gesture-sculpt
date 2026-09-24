@@ -68,57 +68,112 @@ export function isHandHorizontal(landmarks: Point3D[]): boolean {
   return Math.abs(middleMcp.x - wrist.x) > Math.abs(middleMcp.y - wrist.y);
 }
 
-export type BladePose = 'NONE' | 'HORIZONTAL' | 'VERTICAL' | 'DOWN';
+export type HandPose = 'NONE' | 'HORIZONTAL' | 'VERTICAL' | 'DOWN' | 'SIDE' | 'CURLED';
 
-export interface BladeThresholds {
+export interface PoseThresholds {
   extendRatio: number;
   togetherRatio: number;
   minThumbGapRatio: number;
+  bladeThumbGapRatio: number;
+  sideThumbGapRatio: number;
+  sideMaxElevationDeg: number;
   orientationDominance: number;
+  curledIndexMin: number;
+  curledOthersMax: number;
 }
 
-/**
- * Flat-hand poses from the recorded reference gestures — all four non-thumb
- * fingers extended AND held together (not spread). Which way the FINGERS
- * point picks the tool:
- *
- *   HORIZONTAL (fingers sideways, palm down)  = cut
- *   VERTICAL   (fingers up)                   = rotate by turning the palm
- *   DOWN       (fingers hanging down, "beak") = pull height from above
- *
- * HORIZONTAL/VERTICAL also require the thumb away from the index tip (not a
- * pinch); DOWN does not — in the recorded height gesture the thumb touches
- * the fingertips, and that pinch distance flickers across the PINCH
- * threshold mid-pull, which is why a plain pinch was an unreliable trigger
- * for it. Finger direction (knuckle->tip), not wrist->knuckle, is what
- * matters: the "beak" bends the wrist so wrist->knuckle reads horizontal.
- * Distances are 3D and normalized by the knuckle width so the test survives
- * the palm turning edge-on to the camera mid-rotation.
- */
-export function bladePoseOf(landmarks: Point3D[], t: BladeThresholds): BladePose {
+/** wrist->tip / wrist->PIP per finger (index, middle, ring, pinky): >1 extended, <1 curled. Rotation-invariant (3D). */
+export function fingerExtensions(landmarks: Point3D[]): [number, number, number, number] {
   const wrist = landmarks[LM.WRIST];
-  const fingers: Array<[number, number, number]> = [
-    [LM.INDEX_TIP, LM.INDEX_PIP, LM.INDEX_MCP],
-    [LM.MIDDLE_TIP, LM.MIDDLE_PIP, LM.MIDDLE_MCP],
-    [LM.RING_TIP, LM.RING_PIP, LM.RING_MCP],
-    [LM.PINKY_TIP, LM.PINKY_PIP, LM.PINKY_MCP],
-  ];
+  const ratio = (tip: number, pip: number) => distance3D(wrist, landmarks[tip]) / Math.max(1e-6, distance3D(wrist, landmarks[pip]));
+  return [ratio(LM.INDEX_TIP, LM.INDEX_PIP), ratio(LM.MIDDLE_TIP, LM.MIDDLE_PIP), ratio(LM.RING_TIP, LM.RING_PIP), ratio(LM.PINKY_TIP, LM.PINKY_PIP)];
+}
+
+/** Index-to-pinky knuckle width in 3D — the normalizer for every pose ratio (survives the palm turning edge-on). */
+export function knuckleWidth3D(landmarks: Point3D[]): number {
+  return Math.max(1e-4, distance3D(landmarks[LM.INDEX_MCP], landmarks[LM.PINKY_MCP]));
+}
+
+/** Thumb-tip-to-index-tip distance / knuckle width (3D): ~0.1-0.4 pinched, ~2-2.6 in a wide "L". */
+export function thumbIndexGapOf(landmarks: Point3D[]): number {
+  return distance3D(landmarks[LM.THUMB_TIP], landmarks[LM.INDEX_TIP]) / knuckleWidth3D(landmarks);
+}
+
+/** Average knuckle->tip direction of the four fingers, as an elevation angle in image space: 0 = sideways, +90° = up, -90° = down. */
+export function fingerElevationOf(landmarks: Point3D[]): number {
   let dx = 0;
   let dy = 0;
-  for (const [tip, pip, mcp] of fingers) {
-    if (distance3D(wrist, landmarks[tip]) < distance3D(wrist, landmarks[pip]) * t.extendRatio) return 'NONE';
+  for (const [tip, mcp] of [
+    [LM.INDEX_TIP, LM.INDEX_MCP],
+    [LM.MIDDLE_TIP, LM.MIDDLE_MCP],
+    [LM.RING_TIP, LM.RING_MCP],
+    [LM.PINKY_TIP, LM.PINKY_MCP],
+  ]) {
     dx += landmarks[tip].x - landmarks[mcp].x;
     dy += landmarks[tip].y - landmarks[mcp].y;
   }
-  const knuckleWidth = Math.max(1e-4, distance3D(landmarks[LM.INDEX_MCP], landmarks[LM.PINKY_MCP]));
-  if (distance3D(landmarks[LM.INDEX_TIP], landmarks[LM.PINKY_TIP]) / knuckleWidth > t.togetherRatio) return 'NONE';
+  // Image y grows downward, so "up" is -dy.
+  return Math.atan2(-dy, Math.abs(dx));
+}
 
-  // Image y grows downward: fingers pointing up is a negative dy.
-  if (dy > Math.abs(dx) * t.orientationDominance) return 'DOWN';
+/**
+ * Palm tilt around the finger axis: asin of the palm normal's vertical
+ * component (normal = wrist->index knuckle x wrist->pinky knuckle). Only
+ * its CHANGE is meaningful — the cross product's sign flips between left
+ * and right hands, which callers correct for with the handedness.
+ */
+export function palmPitchOf(landmarks: Point3D[]): number {
+  const w = landmarks[LM.WRIST];
+  const a = landmarks[LM.INDEX_MCP];
+  const b = landmarks[LM.PINKY_MCP];
+  const ax = a.x - w.x, ay = a.y - w.y, az = a.z - w.z;
+  const bx = b.x - w.x, by = b.y - w.y, bz = b.z - w.z;
+  const nx = ay * bz - az * by;
+  const ny = az * bx - ax * bz;
+  const nz = ax * by - ay * bx;
+  const len = Math.hypot(nx, ny, nz);
+  return len < 1e-9 ? 0 : Math.asin(Math.max(-1, Math.min(1, ny / len)));
+}
 
-  if (distance3D(landmarks[LM.THUMB_TIP], landmarks[LM.INDEX_TIP]) / knuckleWidth < t.minThumbGapRatio) return 'NONE';
-  if (Math.abs(dx) > Math.abs(dy) * t.orientationDominance) return 'HORIZONTAL';
-  if (-dy > Math.abs(dx) * t.orientationDominance) return 'VERTICAL';
+/** All four fingers extended and held together — the "flat hand" shared by every blade pose and by the two-hand ROUND gesture. */
+export function isFlatHand(landmarks: Point3D[], extendRatio: number, togetherRatio: number): boolean {
+  if (fingerExtensions(landmarks).some((e) => e < extendRatio)) return false;
+  return distance3D(landmarks[LM.INDEX_TIP], landmarks[LM.PINKY_TIP]) / knuckleWidth3D(landmarks) <= togetherRatio;
+}
+
+/**
+ * Hand poses from the recorded reference gestures (gestures-ref/). Each one
+ * engages a tool on its own, with no pinch (see InteractionStateMachine):
+ *
+ *   CURLED     index + thumb, other three fingers curled into the palm  = zoom / push-in
+ *   DOWN       flat, fingers hanging down ("beak", thumb on the tips)    = pull height
+ *   SIDE       flat, fingers sideways, thumb ON the fingertips          = pull width
+ *   HORIZONTAL flat, fingers sideways, thumb away (palm-down blade)     = cut / round corners / tilt view
+ *   VERTICAL   flat, fingers up, thumb away                             = rotate by turning the palm
+ *
+ * Finger direction (knuckle->tip) decides orientation, not wrist->knuckle:
+ * the "beak" poses bend the wrist so wrist->knuckle reads sideways. The
+ * thumb gap splits SIDE from HORIZONTAL, with a dead band between them so a
+ * thumb drifting across the boundary reads NONE instead of flipping tools.
+ * Every ratio is 3D and normalized by the knuckle width.
+ */
+export function handPoseOf(landmarks: Point3D[], t: PoseThresholds): HandPose {
+  const [index, middle, ring, pinky] = fingerExtensions(landmarks);
+  if (index >= t.curledIndexMin && middle <= t.curledOthersMax && ring <= t.curledOthersMax && pinky <= t.curledOthersMax) return 'CURLED';
+
+  if (!isFlatHand(landmarks, t.extendRatio, t.togetherRatio)) return 'NONE';
+
+  const elevation = fingerElevationOf(landmarks);
+  const dominance = Math.atan(1 / t.orientationDominance); // angle below which "sideways" dominates
+  if (elevation < -(Math.PI / 2 - dominance)) return 'DOWN';
+
+  const thumbGap = thumbIndexGapOf(landmarks);
+  if (Math.abs(elevation) < dominance) {
+    if (thumbGap < t.sideThumbGapRatio) return Math.abs(elevation) <= (t.sideMaxElevationDeg * Math.PI) / 180 ? 'SIDE' : 'NONE';
+    if (thumbGap >= t.bladeThumbGapRatio) return 'HORIZONTAL';
+    return 'NONE';
+  }
+  if (elevation > Math.PI / 2 - dominance && thumbGap >= t.minThumbGapRatio) return 'VERTICAL';
   return 'NONE';
 }
 

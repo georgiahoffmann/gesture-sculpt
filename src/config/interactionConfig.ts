@@ -6,6 +6,13 @@ export const INTERACTION_CONFIG = {
   tracking: {
     maxHands: 2,
     minConfidence: 0.6,
+    /**
+     * A lone hand that reappears within this window, and this close (image fraction) to where the
+     * lone hand was, keeps its label even if MediaPipe flipped it. Sized for the reference cut
+     * sweep: ~400ms dropout, ~0.3 of the frame travelled meanwhile.
+     */
+    labelHoldMs: 600,
+    labelHoldDistance: 0.5,
   },
 
   /** Raw-landmark smoothing (removes MediaPipe jitter). Kept separate from mesh smoothing (there is none automatic). */
@@ -162,7 +169,7 @@ export const INTERACTION_CONFIG = {
 
   /**
    * BLADE: flat hand, four fingers extended and held together (see
-   * landmarkUtils.bladePoseOf). HORIZONTAL = cut, VERTICAL = rotate, DOWN =
+   * landmarkUtils.handPoseOf). HORIZONTAL = cut, VERTICAL = rotate, DOWN =
    * height pull. Ratios are 3D and normalized by the index-to-pinky knuckle
    * width. Thresholds were checked against MediaPipe runs on the recorded
    * reference videos (gestures-ref/).
@@ -172,8 +179,18 @@ export const INTERACTION_CONFIG = {
     extendRatio: 1.1,
     /** Index-tip-to-pinky-tip distance / knuckle width must stay BELOW this (fingers together, not spread). */
     togetherRatio: 1.5,
-    /** Thumb-tip-to-index-tip distance / knuckle width must stay ABOVE this (not a pinch). */
+    /** VERTICAL: thumb-tip-to-index-tip distance / knuckle width must stay ABOVE this (not a pinch). */
     minThumbGapRatio: 0.5,
+    /** Fingers sideways: thumb gap at or above this = HORIZONTAL blade (cut sweeps measured 0.66-1.6)... */
+    bladeThumbGapRatio: 0.65,
+    /** ...below this = SIDE "beak" (width pull measured 0.45-0.49). In between reads NONE. */
+    sideThumbGapRatio: 0.6,
+    /** SIDE must point nearly straight sideways (width pull measured 3-12°); a thumb brushing the fingers of a hand held at ~30° (the view-tilt gesture) is not a width pull. */
+    sideMaxElevationDeg: 20,
+    /** CURLED (zoom / push-in): index at least this extended... (measured 0.87 on the first frame, then 0.99-1.37) */
+    curledIndexMin: 0.85,
+    /** ...while middle, ring and pinky are curled at or below this (measured 0.44-0.77). */
+    curledOthersMax: 0.82,
     /** How much one image axis must dominate the other (wrist->middle knuckle) to call the hand horizontal/vertical. */
     orientationDominance: 1.2,
     /**
@@ -186,17 +203,92 @@ export const INTERACTION_CONFIG = {
     downConfirmFrames: 3,
     /** HORIZONTAL (cut) is a fast sweep — at 9 frames the reference sweep was already over before it confirmed. */
     horizontalConfirmFrames: 4,
+    /** SIDE (width pull) — like DOWN, a beak that must beat the pinch detector. */
+    sideConfirmFrames: 5,
+    /** CURLED (zoom / push-in) — its closed state is also a pinch, so it must confirm at pinch speed. */
+    curledConfirmFrames: 3,
     /**
      * A fast sweep blurs the hand and MediaPipe drops it for a few frames (up to ~330ms in the
      * reference video). A blade-engaged mode survives a loss this short instead of going to
      * TRACKING_LOST, and the pose debounce isn't reset by it.
      */
-    trackingGraceMs: 400,
+    trackingGraceMs: 500,
+    /**
+     * For this long after ANY engage, a newly confirmed pose still takes over even if the first
+     * tool already did something — a pinch that fires as the hand arrives can nudge a rotation
+     * before the pose it's really part of confirms (zoom-in reference video).
+     */
+    handoffWindowMs: 300,
     /**
      * Consecutive frames the pose must be LOST before it releases. In the rotate reference video the
      * back of the hand turns edge-on for ~0.4s and ring/pinky get occluded — this must bridge that.
      */
     releaseFrames: 16,
+  },
+
+  /**
+   * HORIZONTAL blade = one pose, three tools, told apart by the hand's first
+   * motion (whichever threshold is crossed first locks the tool until
+   * release): sweep sideways = CUT, fingers arc up toward vertical = ROUND
+   * CORNERS, palm rocks in place = TILT the view. Measured on the reference
+   * videos: the corner arc raises finger elevation 8°->83°; the tilt rocks
+   * palm pitch ~±25° with elevation flat and <0.12 lateral travel.
+   */
+  bladeTool: {
+    /** Finger elevation rise (degrees) that locks ROUND CORNERS. */
+    cornerStartDeg: 25,
+    /** Elevation rise (degrees) at which the corners reach their maximum radius. */
+    cornerFullDeg: 75,
+    /** Maximum corner radius, as a fraction of the object's smallest half-extent (1 would be fully round). */
+    cornerMaxRadiusFraction: 0.55,
+    /** Palm pitch change (degrees) that locks TILT — only while elevation has risen less than `tiltMaxElevationDeg`... */
+    tiltStartDeg: 15,
+    tiltMaxElevationDeg: 10,
+    /**
+     * ...and only if the palm STARTED facing the camera rather than the floor: the tilt reference
+     * held the palm at -10..+20° pitch, the cut sweep at 40..70° (palm down) with ±20° of wobble
+     * that would otherwise read as a tilt.
+     */
+    tiltMaxStartPitchDeg: 30,
+    /** Camera orbit (radians of view pitch) per radian of palm pitch. Flip the sign if the view tilts the wrong way. */
+    tiltSensitivity: 1.5,
+    /** Lateral palm travel (image fraction) that locks CUT — the sweep has clearly started. */
+    cutLockTravel: 0.12,
+  },
+
+  /**
+   * CURLED pose = zoom or push-in, told apart the same way. Zoom is a
+   * RATCHET, matching the reference videos (both repeat open/close): a
+   * gesture that STARTS closed zooms in on each opening and ignores the
+   * closings; one that STARTS open zooms out on each closing. A closed pinch
+   * that moves toward the object instead pushes the touched vertices in.
+   */
+  curl: {
+    /** Thumb gap above this at engage = started open = ZOOM OUT. */
+    openGap: 1.2,
+    /** Opening by this much (from the smallest gap seen) locks ZOOM IN. */
+    zoomStartDelta: 0.6,
+    /** Camera distance change per unit of thumb gap (a full open ~2.3 => ~1 unit of the 3..14 range). */
+    zoomSensitivity: 0.45,
+    /** Cursor approach toward the object's center (NDC) that locks PUSH. */
+    pushStartTravel: 0.05,
+    /** World units pushed inward per NDC unit of approach. */
+    pushSensitivity: 0.6,
+  },
+
+  /**
+   * Two-hand ROUND ("esculpir em formato arredondado"): both hands flat and
+   * cupped around the object at once. How rounded it gets follows how much
+   * the hands have traced around it (path length in hand spans).
+   */
+  round: {
+    /** Per-hand "flat" test for this gesture — looser than the blade's, the recorded hands are slightly cupped. */
+    flatExtendRatio: 1.08,
+    flatTogetherRatio: 1.3,
+    confirmFrames: 4,
+    releaseFrames: 10,
+    /** Traced path (both hands averaged, in hand spans) that reaches full roundness. */
+    fullTraceSpans: 2.5,
   },
 
   cut: {

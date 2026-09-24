@@ -53,21 +53,34 @@ cycle, multiple pointers (both hands + mouse) can be open at once.
 | `ROTATING` | ROTATE | `ROTATE · Δ=N°` | Spins the object around Y by N degrees (wrist roll). |
 | `ROTATING` | any (vertical blade) | `ROTATE · palma · Δ=N°` | Spins the object around Y following the flat upright palm turning around its own vertical axis. |
 | `HEIGHT_EDIT` | any ("beak" down) | `HEIGHT_EDIT` | Same height stretch, engaged by the pull-from-above pose instead of a pinch. |
-| `CUTTING` | any (horizontal blade) | `CUT` / `CUT · incompleto` | Splits the object along the hand's path once the sweep crosses ≥80% of its width. |
+| `BLADE_TOOL` | any (horizontal blade) | `CUT` / `ROUND_CORNERS` / `TILT_VIEW` | Cut, round corners or tilt the view, depending on the first motion. |
+| `CURL_TOOL` | any (curled pinch) | `ZOOM_IN` / `ZOOM_OUT` / `PUSH` | Zoom ratchet or push-in, depending on the first motion. |
 
-**Hand poses** (`tracking/landmarkUtils.ts` `bladePoseOf`, debounced by
-`gestures/bladeDetector.ts`): four fingers extended and held together.
-The finger direction (knuckle→tip) picks the tool, and a pose engages on
-its own, with no pinch and in any zone:
+**Hand poses** (`tracking/landmarkUtils.ts` `handPoseOf`, debounced by
+`gestures/handPoseDetector.ts`). A pose engages its tool on its own, with
+no pinch and in any zone. Two of the poses are multi-tools: the hand's
+first motion picks the tool, and it stays locked until release.
 
-| Pose | Fingers point | Engages |
+| Pose | Hand | Engages |
 |---|---|---|
-| `HORIZONTAL` blade | sideways, palm down, thumb away | `CUTTING` |
-| `VERTICAL` blade | up, thumb away | `ROTATING` (palm yaw) |
-| `DOWN` "beak" | down, thumb on the fingertips | `HEIGHT_EDIT` (overrides the pinch detector, which flickers on this pose) |
+| `DOWN` | flat, fingers hanging down ("beak"), thumb on the tips | `HEIGHT_EDIT` |
+| `SIDE` | flat, fingers sideways (≤20°), thumb on the tips | `WIDTH_EDIT` |
+| `VERTICAL` | flat, fingers up, thumb away | `ROTATING` (palm yaw) |
+| `HORIZONTAL` | flat, fingers sideways, thumb away | `BLADE_TOOL`: sweep sideways = **cut**, fingers arc up to vertical = **round corners**, palm rocks with the palm facing the camera = **tilt the view** |
+| `CURLED` | index + thumb, other three fingers curled | `CURL_TOOL`: starts open and closes = **zoom out**, starts closed and opens = **zoom in** (both are a ratchet), closed and moving toward the object = **push vertices in** |
+| two hands flat | both hands flat and cupped around the object | **round the whole form**. Roundness follows how far the hands trace around it. |
 
-Thresholds were checked by running MediaPipe on the recorded reference
-videos (`gestures-ref/`, gitignored).
+Handoff: while an engaged tool hasn't changed anything yet, or within
+`blade.handoffWindowMs` of engaging, a newly confirmed different pose takes
+over. For example, a blade that turns into the side-beak becomes the width
+tool, and a pinch that fires a frame before the CURLED pose becomes zoom.
+The pinch detector is ignored on the beak and curled poses, because their
+thumb touches the fingers.
+
+Every threshold was checked by replaying the 10 reference videos
+(`gestures-ref/`, gitignored) through the real pipeline: MediaPipe, pinch
+classifier, pose debounce, state machine and tools. Each video engages
+exactly its intended tool.
 
 **PINCH vs GRIP** (Phase 4 — see `gestures/gestureClassifier.ts`): every ENGAGE used to mean one gesture (index+thumb pinch). Now a real hand is classified as one of `PINCH` (index+thumb close — no condition on the other fingers, same as before Phase 4) or `GRIP` (all four non-thumb fingers tightly converged — a real full grasp), mutually exclusive, GRIP checked first. Both still count as ENGAGE for zone purposes; the gesture type only changes what happens once SCULPTING starts (GRIP = the region scale-from-center below; every other mode/zone treats PINCH and GRIP identically). Mouse has no fingers, so it's always PINCH.
 
@@ -96,12 +109,19 @@ gesture should collapse into one row once the mapping is confirmed).
 
 | Flat hand, fingers together and pointing down ("beak", thumb on the fingertips), raised above the head and pulled up | any | `HEIGHT_EDIT` (DOWN pose) | Object grows taller from the base. | Reference: `Movie on 24-09-26 at 08.57 #2.mov`. Used to land in WIDTH: the bent wrist makes wrist→knuckle read horizontal, and the pinch distance flickered 0.16–0.97 mid-pull. Now a pose of its own, confirmed across the whole recorded pull. |
 | Flat upright hand, fingers together, turning around its vertical axis (palm → edge → back of hand) | any | `ROTATING` (VERTICAL blade) | Object turns around Y with the palm. | Reference: `Movie on 24-09-26 at 08.57 #3.mov`. Accumulates frame-to-frame yaw, so turns past 180° don't wrap. The ~0.4s edge-on stretch (ring/pinky occluded) is bridged by `blade.releaseFrames`. Direction untested live: flip `rotation.palmYawSensitivity` if it feels mirrored. |
-| Flat horizontal hand, palm down, fingers together, swept across the object | any | `CUTTING` (HORIZONTAL blade) | Object splits along the hand's path. The lower piece stays sculptable and the upper one is lifted off as a separate piece. Undoable. | Reference: `Movie on 24-09-26 at 08.57.mov`. See **Cut** below. |
+| Side "beak" (fingers together pointing sideways, thumb on the tips) pulled away from the object | any | `WIDTH_EDIT` (SIDE) | Object gets wider. | Reference: `09.55.mov`. Starts as a blade for a few frames and hands off. |
+| Flat palm-down hand above the object arcing down to vertical at its side (tracing a rounded corner) | any | `BLADE_TOOL` → ROUND CORNERS | Edges and corners get fillets; radius follows how far the fingers rose (peak is kept). Undoable. | Reference: `09.55 #2.mov` (elevation 8°→83°). |
+| Both hands flat and cupped, tracing around the object | any | two-hand ROUND | Form rounds toward a sphere (a capsule if it's tall). Undoable. | Reference: `09.55 #3.mov`. |
+| Flat sideways hand, palm facing the camera, rocking up/down in place | any | `BLADE_TOOL` → TILT | View orbits up/down to show the top/bottom faces. | Reference: `09.56.mov`. Sign untested live: flip `bladeTool.tiltSensitivity` if it feels inverted. |
+| Curled pinch opening into an "L" (repeated) | any | `CURL_TOOL` → ZOOM IN | Camera moves closer on each opening. | Reference: `09.57.mov`. |
+| "L" closing into a curled pinch (repeated) | any | `CURL_TOOL` → ZOOM OUT | Camera moves away on each closing. | Reference: `09.57 #2.mov`. |
+| Closed curled pinch moving toward the object | MESH under the cursor | `CURL_TOOL` → PUSH | Vertices under the brush are pushed back into the form. Undoable. | Reference: `09.57 #3.mov`. |
+| Flat horizontal hand, palm down, fingers together, swept across the object | any | `BLADE_TOOL` → CUT | Object splits along the hand's path. The lower piece stays sculptable and the upper one is lifted off as a separate piece. Undoable. | Reference: `Movie on 24-09-26 at 08.57.mov`. See **Cut** below. |
 
 ## Cut
 
 The implementation lives in `interaction/cutController.ts` and `sculpt/meshCutter.ts`.
-While `CUTTING`, the palm center is projected onto a vertical plane
+While the blade tool can still be a cut, the palm center is projected onto a vertical plane
 through the object facing the camera. Samples inside the object's height
 are binned along the sweep into a cut-height curve, so a tilted or wavy
 sweep cuts along that path. Each piece is the full mesh with its vertices

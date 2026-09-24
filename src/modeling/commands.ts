@@ -25,6 +25,11 @@ export class MeshEditCommand implements ModelingCommand {
     private before: Float32Array
   ) {}
 
+  /** The positions this edit started from — read-only use (tools that recompute from it every frame). */
+  get beforePositions(): Float32Array {
+    return this.before;
+  }
+
   captureAfter(): void {
     this.after = this.deformer.snapshotPositions();
   }

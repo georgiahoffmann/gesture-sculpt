@@ -1,5 +1,5 @@
 import type { Zone } from './spatialContext';
-import type { BladePose } from '../tracking/landmarkUtils';
+import type { HandPose } from '../tracking/landmarkUtils';
 import { INTERACTION_CONFIG } from '../config/interactionConfig';
 
 export type InteractionMode =
@@ -14,11 +14,12 @@ export type InteractionMode =
   | 'HEIGHT_EDIT'
   | 'WIDTH_EDIT'
   | 'ROTATING'
-  | 'CUTTING'
+  | 'BLADE_TOOL'
+  | 'CURL_TOOL'
   | 'TRACKING_LOST'
   | 'COOLDOWN';
 
-const ENGAGED_MODES: ReadonlySet<InteractionMode> = new Set(['SCULPTING', 'EDITING', 'HEIGHT_EDIT', 'WIDTH_EDIT', 'ROTATING', 'CUTTING']);
+const ENGAGED_MODES: ReadonlySet<InteractionMode> = new Set(['SCULPTING', 'EDITING', 'HEIGHT_EDIT', 'WIDTH_EDIT', 'ROTATING', 'BLADE_TOOL', 'CURL_TOOL']);
 
 /** What engaged the current mode: a pinch/grip in a zone, or a blade pose (which needs no zone). */
 export type EngageSource = 'PINCH' | 'BLADE';
@@ -37,11 +38,19 @@ export interface StateMachineInput {
    */
   editModeActive: boolean;
   /**
-   * Debounced blade pose (flat hand, fingers together). Engages on its own,
-   * without a pinch and regardless of zone: HORIZONTAL = CUTTING, VERTICAL =
-   * ROTATING (palm-yaw), DOWN = HEIGHT_EDIT. Always 'NONE' for the mouse.
+   * Debounced hand pose (gestures/handPoseDetector.ts). Engages on its own,
+   * without a pinch and regardless of zone — see modeForPose. Always 'NONE'
+   * for the mouse.
    */
-  blade: BladePose;
+  blade: HandPose;
+  /**
+   * Has the currently engaged pose tool changed anything yet? While it
+   * hasn't, a switch to a different pose HANDS OFF straight to that pose's
+   * tool (a blade that turns into a side-beak at the start of the width
+   * pull must become the width tool, not end in a cooldown). Once it has,
+   * a pose change ends the tool like a release.
+   */
+  engagedPristine: boolean;
 }
 
 /**
@@ -72,7 +81,8 @@ export class InteractionStateMachine {
   private awaitingRelease = false;
   private cooldownUntil: number | null = null;
   private source: EngageSource = 'PINCH';
-  private engagedBlade: BladePose = 'NONE';
+  private engagedBlade: HandPose = 'NONE';
+  private engagedAtMs = 0;
 
   update(input: StateMachineInput, nowMs: number): InteractionMode {
     if (!input.present) {
@@ -102,6 +112,19 @@ export class InteractionStateMachine {
     if (ENGAGED_MODES.has(this.mode)) {
       // LOCKED: only a release can change this, regardless of zone or pinch wobble. A
       // blade-engaged mode releases when THAT blade pose ends, a pinch-engaged one on unpinch.
+      if (input.blade !== 'NONE' && (this.source === 'PINCH' || input.blade !== this.engagedBlade)) {
+        // Round-corners arc: the HORIZONTAL blade tool keeps going while the hand turns vertical.
+        if (this.source === 'BLADE' && this.engagedBlade === 'HORIZONTAL' && input.blade === 'VERTICAL' && !input.engagedPristine) return this.mode;
+        // Handoff: nothing done yet (or only just engaged), and a different pose has now been
+        // confirmed — that pose wins. Covers a pinch that fires a few frames before the CURLED
+        // pose it's part of confirms.
+        if (input.engagedPristine || nowMs - this.engagedAtMs < INTERACTION_CONFIG.blade.handoffWindowMs) {
+          this.source = 'BLADE';
+          this.engagedBlade = input.blade;
+          this.mode = modeForPose(input.blade);
+          return this.mode;
+        }
+      }
       const held = this.source === 'BLADE' ? input.blade === this.engagedBlade : input.isPinching;
       if (!held) {
         this.awaitingRelease = true;
@@ -120,13 +143,15 @@ export class InteractionStateMachine {
     if (input.blade !== 'NONE') {
       this.source = 'BLADE';
       this.engagedBlade = input.blade;
-      this.mode = input.blade === 'HORIZONTAL' ? 'CUTTING' : input.blade === 'VERTICAL' ? 'ROTATING' : 'HEIGHT_EDIT';
+      this.engagedAtMs = nowMs;
+      this.mode = modeForPose(input.blade);
       return this.mode;
     }
 
     if (input.isPinching) {
       this.source = 'PINCH';
       this.engagedBlade = 'NONE';
+      this.engagedAtMs = nowMs;
       this.mode = engagedModeFor(input.zone, input.editModeActive);
       return this.mode;
     }
@@ -137,6 +162,16 @@ export class InteractionStateMachine {
 
   get current(): InteractionMode {
     return this.mode;
+  }
+
+  /** Currently in a mode engaged by a pinch/grip (not a pose) — see main.ts's pinch suppression. */
+  get engagedByPinch(): boolean {
+    return ENGAGED_MODES.has(this.mode) && this.source === 'PINCH';
+  }
+
+  /** After a gesture that overrides this pointer (two-hand ROUND), don't let a still-held pose engage until it's released. */
+  requireRelease(): void {
+    this.awaitingRelease = true;
   }
 
   /** What engaged the current (or most recent) engaged mode — main.ts uses it to pick wrist-roll vs palm-yaw rotation. */
@@ -150,6 +185,24 @@ export class InteractionStateMachine {
     this.cooldownUntil = null;
     this.source = 'PINCH';
     this.engagedBlade = 'NONE';
+  }
+}
+
+/** The tool each pose engages. HORIZONTAL and CURLED are multi-tools resolved by the hand's first motion (see main.ts). */
+function modeForPose(pose: HandPose): InteractionMode {
+  switch (pose) {
+    case 'HORIZONTAL':
+      return 'BLADE_TOOL';
+    case 'VERTICAL':
+      return 'ROTATING';
+    case 'DOWN':
+      return 'HEIGHT_EDIT';
+    case 'SIDE':
+      return 'WIDTH_EDIT';
+    case 'CURLED':
+      return 'CURL_TOOL';
+    default:
+      return 'IDLE';
   }
 }
 

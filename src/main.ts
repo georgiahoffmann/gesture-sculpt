@@ -9,9 +9,12 @@ import { TransformEngine } from './interaction/transformEngine';
 import { classifyZone } from './interaction/spatialContext';
 import { GestureClassifier, type HandGesture } from './gestures/gestureClassifier';
 import { RotationDetector, PalmYawDetector } from './gestures/rotationDetector';
-import { BladeDetector } from './gestures/bladeDetector';
-import type { BladePose } from './tracking/landmarkUtils';
-import { CutController } from './interaction/cutController';
+import { HandPoseDetector } from './gestures/handPoseDetector';
+import type { HandPose } from './tracking/landmarkUtils';
+import { BladeTool } from './interaction/bladeTool';
+import { CurlTool } from './interaction/curlTool';
+import { TwoHandRound } from './gestures/twoHandRound';
+import { roundedBoxPositions, smallestHalfExtent } from './sculpt/rounding';
 import { cutObject, isCutPiece, setCutPieceSculptMode } from './sculpt/meshCutter';
 import { StrokeDeformer, type StrokeUpdateResult } from './sculpt/strokeDeformer';
 import { MeshDeformer } from './sculpt/meshDeformer';
@@ -61,7 +64,14 @@ interface PointerRuntime {
   rotationDetector: RotationDetector;
   /** Vertical-blade rotation (palm turning around its own vertical axis) — used instead of rotationDetector when ROTATING was engaged by a blade, not a pinch. */
   palmYawDetector: PalmYawDetector;
-  cutController: CutController;
+  /** HORIZONTAL blade multi-tool: cut / round corners / tilt view. */
+  bladeTool: BladeTool;
+  /** CURLED pinch multi-tool: zoom in / zoom out / push in. */
+  curlTool: CurlTool;
+  /** Undo step for an in-progress ROUND CORNERS (recomputed from its before-snapshot every frame). */
+  cornerEdit: MeshEditCommand | null;
+  /** Has the engaged pose tool changed anything yet? Gates the pose handoff in the state machine. */
+  toolDirty: boolean;
   /** Last frame this pointer was tracked — for the blade tracking-grace window. */
   lastSeenMs: number;
   rotationBaselineY: number;
@@ -107,7 +117,10 @@ function main(): void {
         widthManipulator: new WidthManipulator(),
         rotationDetector: new RotationDetector(),
         palmYawDetector: new PalmYawDetector(),
-        cutController: new CutController(),
+        bladeTool: new BladeTool(),
+        curlTool: new CurlTool(),
+        cornerEdit: null,
+        toolDirty: false,
         lastSeenMs: 0,
         rotationBaselineY: 0,
         previousMode: 'IDLE',
@@ -120,7 +133,9 @@ function main(): void {
   const handProjector = new HandProjector();
   const raycaster = new RaycasterService();
   const gestureClassifier = new GestureClassifier();
-  const bladeDetector = new BladeDetector();
+  const handPoseDetector = new HandPoseDetector();
+  const twoHandRound = new TwoHandRound();
+  let roundEdit: MeshEditCommand | null = null;
 
   // Cut-line preview: the hand's path across the object while CUTTING, drawn on top of everything.
   const cutPreviewMaterial = new THREE.LineBasicMaterial({ color: 0xff2d7a, depthTest: false, transparent: true });
@@ -413,6 +428,7 @@ function main(): void {
 
     const hands = tracker.update(nowMs);
     drawHandSkeleton(webcamOverlay, hands);
+    const roundFrame = formFrozen ? { candidate: false, active: false, started: false, ended: false, amount: 0 } : twoHandRound.update(hands);
 
     const topNdc = formFrozen ? null : computeTopZoneNdc(camera);
     const centerNdcThisFrame = formFrozen ? null : computeCenterNdc(camera);
@@ -437,7 +453,7 @@ function main(): void {
       if (
         !present &&
         runtime.stateMachine.engageSource === 'BLADE' &&
-        (runtime.previousMode === 'CUTTING' || runtime.previousMode === 'ROTATING' || runtime.previousMode === 'HEIGHT_EDIT') &&
+        (['BLADE_TOOL', 'CURL_TOOL', 'ROTATING', 'HEIGHT_EDIT', 'WIDTH_EDIT'] as InteractionMode[]).includes(runtime.previousMode) &&
         nowMs - runtime.lastSeenMs < INTERACTION_CONFIG.blade.trackingGraceMs
       ) {
         results.push({ id, hand: null, present: false, mode: runtime.previousMode, hit: null, stroke: null, edit: null });
@@ -449,7 +465,10 @@ function main(): void {
           handProjector.reset(id);
           gestureClassifier.reset(id as Handedness);
         }
-        const mode = runtime.stateMachine.update({ present: false, isPinching: false, zone: 'ROTATE', editModeActive, blade: 'NONE' }, nowMs);
+        const mode = runtime.stateMachine.update(
+          { present: false, isPinching: false, zone: 'ROTATE', editModeActive, blade: 'NONE', engagedPristine: !runtime.toolDirty },
+          nowMs
+        );
         applyModeTransition(id, runtime, mode, null, null, null, null, null, nowMs, 'NONE');
         results.push({ id, hand: null, present: false, mode, hit: null, stroke: null, edit: null });
         continue;
@@ -463,7 +482,7 @@ function main(): void {
       // index+thumb pinch (see gestures/gestureClassifier.ts — "pegada grande", Phase 4).
       let gesture: HandGesture = 'NONE';
       // Flat-hand blade (cut / palm-yaw rotate) — hand-only, and never while a pinch/grip is on.
-      let blade: BladePose = 'NONE';
+      let blade: HandPose = 'NONE';
       let palmNdc: THREE.Vector2 | null = null;
 
       if (id === 'Mouse') {
@@ -479,14 +498,22 @@ function main(): void {
         cursorNdc = projected.ndc;
         depthDelta = projected.depthDelta;
         gesture = gestureClassifier.update(hand!);
-        const confirmedBlade = bladeDetector.update(hand!, nowMs);
-        // The height "beak" has the thumb on the fingertips, so the pinch detector flickers on it —
-        // while the raw pose reads DOWN, the pinch is ignored and the DOWN pose drives HEIGHT_EDIT.
-        if (hand!.bladePose === 'DOWN' || confirmedBlade === 'DOWN') gesture = 'NONE';
+        const confirmedBlade = handPoseDetector.update(hand!, nowMs);
+        // The beak poses (DOWN height, SIDE width) have the thumb on the fingertips and the CURLED
+        // pose's closed state IS a pinch, so the pinch detector fires on all three — while any of
+        // them is the raw or confirmed pose, the pinch is ignored and the pose drives its own tool.
+        // Exception: a pinch that has ALREADY engaged is kept alive until the pose confirms, so the
+        // state machine can hand it off — dropping it first would release into a cooldown and the
+        // pose could never engage (seen on the zoom-in reference: pinch fires 1 frame before CURLED).
+        const pinchLike: HandPose[] = ['DOWN', 'SIDE', 'CURLED'];
+        const keepPinch = runtime.stateMachine.engagedByPinch && !pinchLike.includes(confirmedBlade);
+        if (!keepPinch && (pinchLike.includes(hand!.pose) || pinchLike.includes(confirmedBlade))) gesture = 'NONE';
+        // Two flat hands = the two-hand ROUND gesture; neither hand may start its own tool meanwhile.
+        if (roundFrame.candidate || roundFrame.active) gesture = 'NONE';
         isPinching = gesture !== 'NONE';
-        blade = isPinching ? 'NONE' : confirmedBlade;
-        // No cutting a frozen (finished) form.
-        if (blade === 'HORIZONTAL' && formFrozen) blade = 'NONE';
+        blade = isPinching || roundFrame.candidate || roundFrame.active ? 'NONE' : confirmedBlade;
+        // A frozen (finished) form can't be cut, rounded or pushed any more.
+        if (formFrozen && (blade === 'HORIZONTAL' || blade === 'SIDE' || blade === 'DOWN')) blade = 'NONE';
         // The cut line follows the middle of the hand, not the index tip at the end of the blade.
         palmNdc = new THREE.Vector2((1 - hand!.palmCenter.x) * 2 - 1, 1 - hand!.palmCenter.y * 2);
       }
@@ -494,9 +521,11 @@ function main(): void {
       // Mouse has no fingers to orient — WIDTH is a hand-only zone.
       const isHorizontal = id !== 'Mouse' && (hand?.isHorizontal ?? false);
       const pointingDown = id !== 'Mouse' && (hand?.pointingDown ?? false);
-      const hit = formFrozen || isHorizontal || blade !== 'NONE' ? null : raycaster.pickSurface(cursorNdc.x, cursorNdc.y, camera, object.shadeMesh);
+      // CURLED still needs the surface under the cursor (PUSH); the other poses act on the whole object.
+      const needsHit = blade === 'NONE' || blade === 'CURLED';
+      const hit = formFrozen || isHorizontal || !needsHit ? null : raycaster.pickSurface(cursorNdc.x, cursorNdc.y, camera, object.shadeMesh);
       const { zone } = classifyZone(cursorNdc, hit, topNdc, isHorizontal, pointingDown);
-      const mode = runtime.stateMachine.update({ present: true, isPinching, zone, editModeActive, blade }, nowMs);
+      const mode = runtime.stateMachine.update({ present: true, isPinching, zone, editModeActive, blade, engagedPristine: !runtime.toolDirty }, nowMs);
 
       applyModeTransition(id, runtime, mode, hand, cursorNdc, centerNdcThisFrame, transformEngine.getRotationY(), hit, nowMs, runtime.activeGesture);
       runtime.activeGesture = gesture;
@@ -511,12 +540,14 @@ function main(): void {
                 ? runtime.strokeDeformer.updateGrip(hit.point, hit.normal, nowMs)
                 : runtime.strokeDeformer.update(hit.point, hit.normal, depthDelta, brush, nowMs);
             hasSculpted = hasSculpted || stroke.displaced;
+            if (stroke.displaced) runtime.toolDirty = true;
           }
           break;
         case 'EDITING':
           if (hit) {
             edit = runtime.editManipulator.update(hit, depthDelta);
             hasSculpted = hasSculpted || edit.moved;
+            if (edit.moved) runtime.toolDirty = true;
           }
           break;
         case 'HEIGHT_EDIT': {
@@ -524,6 +555,7 @@ function main(): void {
           if (dy !== 0) {
             deformer.applyHeightDelta(object.topology.heightFraction, dy);
             hasSculpted = true;
+            runtime.toolDirty = true;
           }
           break;
         }
@@ -533,6 +565,7 @@ function main(): void {
             if (dw !== 0) {
               deformer.applyWidthDelta(dw);
               hasSculpted = true;
+              runtime.toolDirty = true;
             }
           }
           break;
@@ -543,21 +576,43 @@ function main(): void {
             const delta = runtime.palmYawDetector.delta(hand!);
             if (Math.abs(delta) > rot.palmYawDeadZone) {
               transformEngine.setRotationY(runtime.rotationBaselineY + delta * rot.palmYawSensitivity);
+              runtime.toolDirty = true;
             }
           } else {
             const delta = runtime.rotationDetector.delta(hand!);
             if (Math.abs(delta) > rot.deadZone) {
               transformEngine.setRotationY(runtime.rotationBaselineY + delta * rot.sensitivity);
+              runtime.toolDirty = true;
             }
           }
           break;
         }
-        case 'CUTTING': {
-          if (!palmNdc) break;
-          const cut = runtime.cutController.update(palmNdc, camera, object);
-          cutPreview = cut.preview;
-          if (cut.ready) {
-            const controller = runtime.cutController;
+        case 'BLADE_TOOL': {
+          if (!palmNdc || !hand) break;
+          const blade = runtime.bladeTool.update(hand, palmNdc, camera, object);
+          if (blade.preview) cutPreview = blade.preview;
+
+          if (blade.tiltDelta !== 0) {
+            cameraRig.orbit(0, blade.tiltDelta);
+            runtime.toolDirty = true;
+          }
+
+          if (blade.cornerAmount != null) {
+            // Recomputed from the before-snapshot every frame (absolute, not additive), so raising
+            // and lowering the fingers grows and shrinks the fillets without drift.
+            runtime.cornerEdit ??= new MeshEditCommand(deformer, deformer.snapshotPositions());
+            const before = runtime.cornerEdit.beforePositions;
+            const radius = blade.cornerAmount * INTERACTION_CONFIG.bladeTool.cornerMaxRadiusFraction * smallestHalfExtent(before);
+            roundedBoxPositions(before, object.geometry.getAttribute('position').array as Float32Array, radius);
+            object.geometry.getAttribute('position').needsUpdate = true;
+            if (radius > 0) {
+              runtime.toolDirty = true;
+              hasSculpted = true;
+            }
+          }
+
+          if (blade.cutReady && !runtime.bladeTool.cut.completed) {
+            const controller = runtime.bladeTool.cut;
             const cutHeight = controller.buildCutFunction();
             const result = cutObject(object, (v) => cutHeight(controller.sOfLocal(v, object)), INTERACTION_CONFIG.cut.separationGap);
             history.push(
@@ -574,7 +629,24 @@ function main(): void {
             );
             controller.markDone();
             hasSculpted = true;
+            runtime.toolDirty = true;
             eventLog.push('CUT');
+          }
+          break;
+        }
+        case 'CURL_TOOL': {
+          if (!hand) break;
+          const curl = runtime.curlTool.update(hand, cursorNdc, centerNdcThisFrame);
+          if (curl.zoomDelta !== 0) {
+            cameraRig.zoom(curl.zoomDelta);
+            runtime.toolDirty = true;
+          }
+          if (curl.sub === 'PUSH' && hit && !formFrozen) {
+            stroke = runtime.strokeDeformer.updatePush(hit.point, hit.normal, curl.pushAmount, brush);
+            if (stroke.displaced) {
+              hasSculpted = true;
+              runtime.toolDirty = true;
+            }
           }
           break;
         }
@@ -584,6 +656,27 @@ function main(): void {
 
       const showHit = hit && (mode === 'SCULPTING' || mode === 'HOVER_MESH' || mode === 'EDITING' || mode === 'HOVER_EDIT');
       results.push({ id, hand, present: true, mode, hit: showHit ? hit : null, stroke, edit });
+    }
+
+    // Two-hand ROUND: recomputed from the snapshot taken when it started, like ROUND CORNERS.
+    if (roundFrame.started) roundEdit = new MeshEditCommand(deformer, deformer.snapshotPositions());
+    if (roundEdit && roundFrame.active) {
+      const before = roundEdit.beforePositions;
+      roundedBoxPositions(before, object.geometry.getAttribute('position').array as Float32Array, roundFrame.amount * smallestHalfExtent(before));
+      object.geometry.getAttribute('position').needsUpdate = true;
+      if (roundFrame.amount > 0) hasSculpted = true;
+    }
+    if (roundFrame.ended) {
+      // Hands still flat/vertical after the two-hand gesture must not immediately start a rotation.
+      for (const r of pointerRuntimes.values()) r.stateMachine.requireRelease();
+    }
+    if (roundEdit && (roundFrame.ended || formFrozen)) {
+      roundEdit.captureAfter();
+      if (roundEdit.hasChange) {
+        history.push(roundEdit);
+        eventLog.push('ROUND_FORM');
+      }
+      roundEdit = null;
     }
 
     cutPreviewLine.visible = cutPreview != null && cutPreview.length > 1;
@@ -633,8 +726,12 @@ function main(): void {
 
     const editOperator = rightPanel.editSettings.operator;
     status.update({
-      stateLabel: formFrozen ? 'FORM_FROZEN' : dominantMode(results),
-      activityLabel: formFrozen ? 'FORM_FROZEN' : contextualLabel(results, brush.operator, selectionManager.getMode(), editOperator),
+      stateLabel: formFrozen ? 'FORM_FROZEN' : roundFrame.active ? 'ROUNDING' : dominantMode(results),
+      activityLabel: formFrozen
+        ? 'FORM_FROZEN'
+        : roundFrame.active
+          ? `ROUND · ${Math.round(roundFrame.amount * 100)}%`
+          : contextualLabel(results, brush.operator, selectionManager.getMode(), editOperator),
       trackingStatus: tracker.status,
       handsCount: hands.length,
       fps,
@@ -680,10 +777,26 @@ function main(): void {
       runtime.widthManipulator.end();
       recorder.endEpisode(id, nowMs, 'WIDTH_EDIT');
     }
-    if (runtime.previousMode === 'CUTTING') {
-      const label = runtime.cutController.completed ? 'CUT' : 'CUT · incompleto';
-      runtime.cutController.end();
+    if (runtime.previousMode === 'BLADE_TOOL') {
+      const sub = runtime.bladeTool.subTool;
+      const label =
+        sub === 'CORNERS' ? 'ROUND_CORNERS' : sub === 'TILT' ? 'TILT_VIEW' : runtime.bladeTool.cut.completed ? 'CUT' : `BLADE · ${sub.toLowerCase()}`;
+      if (runtime.cornerEdit) {
+        runtime.cornerEdit.captureAfter();
+        if (runtime.cornerEdit.hasChange) {
+          history.push(runtime.cornerEdit);
+          eventLog.push('ROUND_CORNERS');
+        }
+        runtime.cornerEdit = null;
+      }
+      runtime.bladeTool.end();
       recorder.endEpisode(id, nowMs, label);
+    }
+    if (runtime.previousMode === 'CURL_TOOL') {
+      const sub = runtime.curlTool.subTool;
+      runtime.strokeDeformer.endStroke();
+      runtime.curlTool.end();
+      recorder.endEpisode(id, nowMs, sub === 'UNDECIDED' ? 'CURL · nada' : sub);
     }
     if (runtime.previousMode === 'ROTATING') {
       runtime.rotationDetector.end();
@@ -714,8 +827,14 @@ function main(): void {
       runtime.widthManipulator.begin(cursorNdc, centerNdc);
       recorder.beginEpisode(id, mode, nowMs);
     }
-    if (mode === 'CUTTING') {
-      runtime.cutController.begin(cameraRig.getCamera(), object);
+    if (mode === 'BLADE_TOOL' && hand) {
+      runtime.bladeTool.begin(hand, cameraRig.getCamera(), object);
+      recorder.beginEpisode(id, mode, nowMs);
+    }
+    if (mode === 'CURL_TOOL' && hand && cursorNdc) {
+      runtime.curlTool.begin(hand, cursorNdc, centerNdc);
+      // Opens an undo step; a zoom-only gesture changes no vertices, so endStroke pushes nothing.
+      runtime.strokeDeformer.beginStroke();
       recorder.beginEpisode(id, mode, nowMs);
     }
     if (mode === 'ROTATING' && hand && currentRotationY != null) {
@@ -725,6 +844,7 @@ function main(): void {
       recorder.beginEpisode(id, mode, nowMs);
     }
 
+    runtime.toolDirty = false;
     runtime.previousMode = mode;
   }
 
@@ -738,7 +858,8 @@ function dominantMode(results: Array<{ mode: InteractionMode }>): string {
     'HEIGHT_EDIT',
     'WIDTH_EDIT',
     'ROTATING',
-    'CUTTING',
+    'BLADE_TOOL',
+    'CURL_TOOL',
     'TRACKING_LOST',
     'COOLDOWN',
     'HOVER_MESH',
@@ -765,7 +886,8 @@ function contextualLabel(
   if (results.some((r) => r.mode === 'HEIGHT_EDIT')) return 'HEIGHT · ↕';
   if (results.some((r) => r.mode === 'WIDTH_EDIT')) return 'WIDTH · ↔';
   if (results.some((r) => r.mode === 'ROTATING')) return 'ROTATE · ↻';
-  if (results.some((r) => r.mode === 'CUTTING')) return 'CUT · ✂';
+  if (results.some((r) => r.mode === 'BLADE_TOOL')) return 'BLADE · corte / cantos / inclinar';
+  if (results.some((r) => r.mode === 'CURL_TOOL')) return 'PINÇA · zoom / empurrar';
   if (results.some((r) => r.mode === 'TRACKING_LOST')) return 'TRACKING LOST';
   if (results.some((r) => r.mode === 'COOLDOWN')) return 'COOLDOWN';
   if (results.some((r) => r.mode === 'HOVER_MESH')) return 'HOVER · MESH';
