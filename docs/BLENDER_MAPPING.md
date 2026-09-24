@@ -1,13 +1,14 @@
 # Blender → GESTURE_SCULPT mapping
 
-`./blender/` is a **reference-only** shallow clone (`git clone --depth=1`) of
-github.com/blender/blender. Nothing in this app imports from it, bundles it,
-or depends on it at runtime or build time. It exists so we can study how a
+The Blender source (github.com/blender/blender, shallow clone) was used as a
+**reference only**. It is not part of this repository: clone it anywhere
+outside the project if you need it again. Nothing in this app imports from
+it, bundles it, or depends on it at runtime or build time. It exists so we can study how a
 mature modeler solves problems and then write our own independent
 TypeScript/Three.js implementation — never a port, never a translation of GPL
 code.
 
-Concrete things read in `./blender/source/blender/` before writing the code
+Concrete things read in the Blender source (`source/blender/`) before writing the code
 in this repo (see git history / PR description for the exact commands):
 
 - `bmesh/bmesh_class.hh` — `BMVert`/`BMEdge`/`BMLoop`/`BMFace`. The loop is

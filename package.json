@@ -1,8 +1,17 @@
 {
   "name": "gesture-sculpt",
   "version": "0.1.0",
-  "description": "Experimental hand-tracked 3D modeling prototype (Vite + TypeScript + Three.js + MediaPipe Tasks Vision).",
+  "private": true,
+  "description": "Hand-tracked 3D sculpting in the browser — shape a mesh with webcam gestures (Vite + TypeScript + Three.js + MediaPipe Tasks Vision).",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/georgiahoffmann/gesture-sculpt.git"
+  },
+  "homepage": "https://gesture-sculpt.vercel.app",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

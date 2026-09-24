@@ -1,7 +1,6 @@
 node_modules
 dist
+docs
+gestures-ref
 .DS_Store
 *.local
-.vercel
-blender
-legacy

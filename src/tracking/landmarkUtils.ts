@@ -235,14 +235,6 @@ export function handSpanOf(landmarks: Point3D[]): number {
   return Math.max(1e-4, distance2D(landmarks[LM.WRIST], landmarks[LM.MIDDLE_MCP]));
 }
 
-/** Average distance from the palm center to the four non-thumb fingertips, in raw (un-normalized) units. */
-export function averageFingertipSpread(landmarks: Point3D[], palmCenter: Point3D): number {
-  const tips = [LM.INDEX_TIP, LM.MIDDLE_TIP, LM.RING_TIP, LM.PINKY_TIP];
-  let sum = 0;
-  for (const t of tips) sum += distance2D(landmarks[t], palmCenter);
-  return sum / tips.length;
-}
-
 /**
  * Index-knuckle-to-pinky-knuckle distance: the hand-width reference pinch is
  * normalized against, so "how far apart are thumb and index" reads the same

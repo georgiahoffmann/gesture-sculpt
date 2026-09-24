@@ -1,7 +1,19 @@
-node_modules
-dist
-.DS_Store
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Local env / deployment config
 *.local
-.vercel
-blender
-gestures-ref
+.env
+.env.*
+.vercel/
+
+# Editor & OS
+.vscode/
+.idea/
+.DS_Store
+
+# Reference recordings of the gestures (large binaries, kept locally only)
+gestures-ref/
