@@ -190,7 +190,9 @@ export const INTERACTION_CONFIG = {
     /** CURLED (zoom / push-in): index at least this extended... (measured 0.87 on the first frame, then 0.99-1.37) */
     curledIndexMin: 0.85,
     /** ...while middle, ring and pinky are curled at or below this (measured 0.44-0.77). */
-    curledOthersMax: 0.82,
+    curledOthersMax: 0.88,
+    /** TRIPOD (zoom out): middle finger NOT curled (measured 0.94-1.40; the CURLED pose's middle is 0.55-0.77). */
+    tripodMiddleMin: 0.9,
     /** How much one image axis must dominate the other (wrist->middle knuckle) to call the hand horizontal/vertical. */
     orientationDominance: 1.2,
     /**
@@ -207,6 +209,7 @@ export const INTERACTION_CONFIG = {
     sideConfirmFrames: 5,
     /** CURLED (zoom / push-in) — its closed state is also a pinch, so it must confirm at pinch speed. */
     curledConfirmFrames: 3,
+    tripodConfirmFrames: 3,
     /**
      * A fast sweep blurs the hand and MediaPipe drops it for a few frames (up to ~330ms in the
      * reference video). A blade-engaged mode survives a loss this short instead of going to
@@ -224,6 +227,11 @@ export const INTERACTION_CONFIG = {
      * back of the hand turns edge-on for ~0.4s and ring/pinky get occluded — this must bridge that.
      */
     releaseFrames: 16,
+    /**
+     * VERTICAL and HORIZONTAL (the rotate and tilt poses) hold longer: turning the palm keeps
+     * occluding fingers, and a release mid-turn is what made rotation feel fragmented.
+     */
+    rotationReleaseFrames: 30,
   },
 
   /**
@@ -239,8 +247,10 @@ export const INTERACTION_CONFIG = {
     cornerStartDeg: 25,
     /** Elevation rise (degrees) at which the corners reach their maximum radius. */
     cornerFullDeg: 75,
-    /** Maximum corner radius, as a fraction of the object's smallest half-extent (1 would be fully round). */
+    /** Maximum corner radius, as a fraction of the object's smallest half-extent (larger starts to ramp along the edges). */
     cornerMaxRadiusFraction: 0.55,
+    /** How far (× radius) the rounding fades out along the three edges meeting at the rounded corner. */
+    cornerEdgeTaper: 2.5,
     /** Palm pitch change (degrees) that locks TILT — only while elevation has risen less than `tiltMaxElevationDeg`... */
     tiltStartDeg: 15,
     tiltMaxElevationDeg: 10,
@@ -257,15 +267,14 @@ export const INTERACTION_CONFIG = {
   },
 
   /**
-   * CURLED pose = zoom or push-in, told apart the same way. Zoom is a
-   * RATCHET, matching the reference videos (both repeat open/close): a
-   * gesture that STARTS closed zooms in on each opening and ignores the
-   * closings; one that STARTS open zooms out on each closing. A closed pinch
-   * that moves toward the object instead pushes the touched vertices in.
+   * CURLED pose (index + thumb) = zoom in or push-in, told apart by the
+   * first motion; TRIPOD (thumb + index + middle) = zoom out. Zoom is a
+   * RATCHET, matching the reference videos (both repeat open/close): zoom
+   * in counts each opening and ignores the closings, zoom out counts each
+   * closing. A closed CURLED pinch that moves toward the object instead
+   * pushes the touched vertices in.
    */
   curl: {
-    /** Thumb gap above this at engage = started open = ZOOM OUT. */
-    openGap: 1.2,
     /** Opening by this much (from the smallest gap seen) locks ZOOM IN. */
     zoomStartDelta: 0.6,
     /** Camera distance change per unit of thumb gap (a full open ~2.3 => ~1 unit of the 3..14 range). */
@@ -313,8 +322,10 @@ export const INTERACTION_CONFIG = {
     deadZone: 0.02,
     /** Vertical-blade rotation: object turns this many radians per radian the palm turns. Flip the sign if it feels mirrored. */
     palmYawSensitivity: 1,
-    /** Radians of accumulated palm yaw ignored before vertical-blade rotation applies. */
+    /** Radians of palm yaw that pick the ratchet's direction (see DirectionalRatchet). */
     palmYawDeadZone: 0.06,
+    /** Palm-yaw / tilt ratchet: forward moves smaller than this (radians) wait to accumulate, so jitter doesn't creep. */
+    ratchetBand: 0.035,
   },
 
   height: {
@@ -338,6 +349,14 @@ export const INTERACTION_CONFIG = {
     sensitivity: 1.4,
     /** NDC-distance-from-center movement ignored before it changes width (dead zone). */
     deadZone: 0.01,
+  },
+
+  view: {
+    /**
+     * Height/width gestures stop growing the form once any of its points would pass this far out
+     * in normalized screen space (1 = the viewport edge) — the whole form must stay visible.
+     */
+    maxExtentNdc: 0.9,
   },
 
   trackingLost: {

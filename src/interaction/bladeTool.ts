@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { HandState } from '../tracking/types';
 import type { SculptableObject } from '../modeling/modelingTypes';
 import { CutController } from './cutController';
+import { DirectionalRatchet } from '../gestures/rotationDetector';
 import { INTERACTION_CONFIG } from '../config/interactionConfig';
 
 export type BladeSubTool = 'UNDECIDED' | 'CUT' | 'CORNERS' | 'TILT';
@@ -37,19 +38,25 @@ export class BladeTool {
   private sub: BladeSubTool = 'UNDECIDED';
   private elevation0 = 0;
   private pitch0 = 0;
-  private lastPitch = 0;
+  private tiltRatchet = new DirectionalRatchet();
+  private lastTilt = 0;
   private pitchSign = 1;
   private x0 = 0;
   private cornerPeak = 0;
+  /** Where the palm was (NDC) when ROUND CORNERS locked — picks which corner gets rounded. */
+  cornerAnchor: THREE.Vector2 | null = null;
 
   begin(hand: HandState, camera: THREE.Camera, object: SculptableObject): void {
     this.sub = 'UNDECIDED';
     this.elevation0 = hand.fingerElevation;
-    this.pitch0 = this.lastPitch = hand.palmPitch;
+    this.pitch0 = hand.palmPitch;
+    this.tiltRatchet.reset(0);
+    this.lastTilt = 0;
     // The palm normal's cross product flips between hands — normalize so "tilt" means the same motion for both.
     this.pitchSign = hand.handedness === 'Right' ? 1 : -1;
     this.x0 = hand.palmCenter.x;
     this.cornerPeak = 0;
+    this.cornerAnchor = null;
     this.cut.begin(camera, object);
   }
 
@@ -69,7 +76,10 @@ export class BladeTool {
 
     if (this.sub === 'UNDECIDED') {
       if (cutReady || travel > cfg.cutLockTravel) this.sub = 'CUT';
-      else if (elevationRise > cfg.cornerStartDeg) this.sub = 'CORNERS';
+      else if (elevationRise > cfg.cornerStartDeg) {
+        this.sub = 'CORNERS';
+        this.cornerAnchor = palmNdc.clone();
+      }
       else if (
         Math.abs(pitchChange) > cfg.tiltStartDeg &&
         elevationRise < cfg.tiltMaxElevationDeg &&
@@ -78,9 +88,13 @@ export class BladeTool {
         this.sub = 'TILT';
     }
 
+    // Continuous one-way tilt for as long as the palm keeps rocking (see DirectionalRatchet).
     let tiltDelta = 0;
-    if (this.sub === 'TILT') tiltDelta = (hand.palmPitch - this.lastPitch) * this.pitchSign * cfg.tiltSensitivity;
-    this.lastPitch = hand.palmPitch;
+    if (this.sub === 'TILT') {
+      const total = this.tiltRatchet.update(pitchChange * DEG, INTERACTION_CONFIG.rotation.ratchetBand, cfg.tiltStartDeg * DEG * 0.5);
+      tiltDelta = (total - this.lastTilt) * cfg.tiltSensitivity;
+      this.lastTilt = total;
+    }
 
     // Peak, not current: the hand drops away at the end of the arc, and that must not undo the rounding.
     if (this.sub === 'CORNERS') this.cornerPeak = Math.max(this.cornerPeak, Math.min(1, Math.max(0, elevationRise / cfg.cornerFullDeg)));

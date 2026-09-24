@@ -1,7 +1,7 @@
 import type { HandLandmarker } from '@mediapipe/tasks-vision';
 import { createHandLandmarker } from './mediapipe';
 import { HandSmoothing } from './handSmoothing';
-import { LM, distance2D, isFingerExtended, clamp01, palmCenterOf, handSpanOf, handWidthOf, gripDistanceOf, isHandHorizontal, handPoseOf, isPointingDown, isFlatHand, fingerElevationOf, palmPitchOf, thumbIndexGapOf } from './landmarkUtils';
+import { LM, distance2D, isFingerExtended, clamp01, palmCenterOf, handSpanOf, handWidthOf, gripDistanceOf, isHandHorizontal, handPoseOf, isPointingDown, isFlatHand, fingerElevationOf, palmPitchOf, thumbIndexGapOf, tripodGapOf } from './landmarkUtils';
 import type { HandState, Handedness, Point3D } from './types';
 import { INTERACTION_CONFIG } from '../config/interactionConfig';
 
@@ -164,5 +164,6 @@ export function buildHandState(handedness: Handedness, confidence: number, landm
     fingerElevation: fingerElevationOf(landmarks),
     palmPitch: palmPitchOf(landmarks),
     thumbIndexGap: thumbIndexGapOf(landmarks),
+    tripodGap: tripodGapOf(landmarks),
   };
 }

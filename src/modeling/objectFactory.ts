@@ -28,8 +28,11 @@ export function createSculptableObject(scene: THREE.Scene, segments: number): Sc
   const shadeMesh = new THREE.Mesh(geometry, shadeMaterial);
   shadeMesh.renderOrder = 0;
 
+  // Per-vertex colors (shared with the points below) so the selection highlight turns the
+  // wireframe itself lime green where a gesture acts, not just the tiny vertex dots.
   const wireMaterial = new THREE.MeshBasicMaterial({
-    color: 0x1a1a1a,
+    color: 0xffffff,
+    vertexColors: true,
     wireframe: true,
     transparent: true,
     opacity: 0.5,
@@ -44,6 +47,7 @@ export function createSculptableObject(scene: THREE.Scene, segments: number): Sc
   const pointsMaterial = new THREE.PointsMaterial({ size: 0.02, vertexColors: true });
   const points = new THREE.Points(pointsGeometry, pointsMaterial);
   points.renderOrder = 2;
+  geometry.setAttribute('color', pointsGeometry.getAttribute('color'));
   resetPointColors(pointsGeometry);
 
   const firstMaterial = MATERIAL_LIBRARY[0];
@@ -101,10 +105,15 @@ export function syncPointsGeometry(object: SculptableObject): void {
 
   pointsGeometry.setAttribute('position', position);
   pointsGeometry.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(position.count * 3), 3));
+  object.geometry.setAttribute('color', pointsGeometry.getAttribute('color'));
   resetPointColors(pointsGeometry);
 }
 
-const BASE_POINT_COLOR: [number, number, number] = [0.1, 0.1, 0.1];
+/** #1a1a1a in linear space — the unselected wire/point color (vertex colors are linear). */
+const BASE_POINT_COLOR: [number, number, number] = (() => {
+  const c = new THREE.Color(0x1a1a1a);
+  return [c.r, c.g, c.b];
+})();
 
 export function resetPointColors(pointsGeometry: THREE.BufferGeometry): void {
   const color = pointsGeometry.getAttribute('color') as THREE.BufferAttribute;

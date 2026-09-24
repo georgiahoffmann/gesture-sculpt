@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { HandState } from '../tracking/types';
+import type { HandPose } from '../tracking/landmarkUtils';
 import { INTERACTION_CONFIG } from '../config/interactionConfig';
 
 export type CurlSubTool = 'UNDECIDED' | 'ZOOM_IN' | 'ZOOM_OUT' | 'PUSH';
@@ -16,11 +17,11 @@ export interface CurlToolFrame {
 const RATCHET_BAND = 0.08;
 
 /**
- * The CURLED-pose multi-tool (index + thumb, other fingers curled):
+ * The pinch-pose multi-tool:
  *
- *   starts OPEN               -> ZOOM OUT: each closing zooms out, openings reset
- *   starts closed, opens      -> ZOOM IN:  each opening zooms in, closings reset
- *   starts closed, moves in   -> PUSH the touched vertices into the form
+ *   TRIPOD (thumb+index+middle)   -> ZOOM OUT: each closing zooms out, openings reset
+ *   CURLED, opens                 -> ZOOM IN:  each opening zooms in, closings reset
+ *   CURLED, closed, moves in      -> PUSH the touched vertices into the form
  *
  * Zoom is a ratchet because both recorded zoom videos repeat the motion
  * (open, close, open...): a plain "gap = zoom level" mapping would undo
@@ -33,16 +34,16 @@ export class CurlTool {
   private startDistance = 0;
   private lastDistance = 0;
 
-  begin(hand: HandState, cursorNdc: THREE.Vector2, centerNdc: THREE.Vector2 | null): void {
-    const gap = hand.thumbIndexGap;
-    this.sub = gap > INTERACTION_CONFIG.curl.openGap ? 'ZOOM_OUT' : 'UNDECIDED';
+  begin(hand: HandState, cursorNdc: THREE.Vector2, centerNdc: THREE.Vector2 | null, pose: HandPose): void {
+    this.sub = pose === 'TRIPOD' ? 'ZOOM_OUT' : 'UNDECIDED';
+    const gap = this.sub === 'ZOOM_OUT' ? hand.tripodGap : hand.thumbIndexGap;
     this.anchor = this.minGap = gap;
     this.startDistance = this.lastDistance = centerNdc ? cursorNdc.distanceTo(centerNdc) : 0;
   }
 
   update(hand: HandState, cursorNdc: THREE.Vector2, centerNdc: THREE.Vector2 | null): CurlToolFrame {
     const cfg = INTERACTION_CONFIG.curl;
-    const gap = hand.thumbIndexGap;
+    const gap = this.sub === 'ZOOM_OUT' ? hand.tripodGap : hand.thumbIndexGap;
     const distance = centerNdc ? cursorNdc.distanceTo(centerNdc) : this.lastDistance;
 
     if (this.sub === 'UNDECIDED') {

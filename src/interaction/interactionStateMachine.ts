@@ -164,6 +164,11 @@ export class InteractionStateMachine {
     return this.mode;
   }
 
+  /** The pose that engaged the current pose tool ('NONE' for a pinch). */
+  get engagedPose(): HandPose {
+    return this.source === 'BLADE' ? this.engagedBlade : 'NONE';
+  }
+
   /** Currently in a mode engaged by a pinch/grip (not a pose) — see main.ts's pinch suppression. */
   get engagedByPinch(): boolean {
     return ENGAGED_MODES.has(this.mode) && this.source === 'PINCH';
@@ -200,6 +205,7 @@ function modeForPose(pose: HandPose): InteractionMode {
     case 'SIDE':
       return 'WIDTH_EDIT';
     case 'CURLED':
+    case 'TRIPOD':
       return 'CURL_TOOL';
     default:
       return 'IDLE';

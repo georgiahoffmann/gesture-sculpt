@@ -64,3 +64,63 @@ export function smallestHalfExtent(source: Float32Array): number {
   }
   return Math.min(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 2;
 }
+
+/**
+ * ROUND ONE CORNER (one-hand gesture): the rounded-box fillet applied only
+ * around the chosen bounding-box corner (`corner` = the sign of x, y, z).
+ * The corner itself and the three edges meeting at it get the full
+ * rounded-box treatment right at the corner, fading back to the original
+ * sharp shape along those edges over `taper` × radius — so it reads as ONE
+ * rounded vertex, never a notch. (Rounding only the corner tip, without
+ * its edges, leaves the tip below the still-sharp edges: a concave scoop.)
+ * The other seven corners are never touched.
+ */
+export function roundCornerPositions(source: Float32Array, out: Float32Array, radius: number, corner: [number, number, number], taper = 2.5): void {
+  out.set(source);
+  if (radius <= 0) return;
+  const count = source.length / 3;
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < count; i++) {
+    for (let a = 0; a < 3; a++) {
+      const v = source[i * 3 + a];
+      if (v < min[a]) min[a] = v;
+      if (v > max[a]) max[a] = v;
+    }
+  }
+  const center = [0, 1, 2].map((a) => (min[a] + max[a]) / 2);
+  const half = [0, 1, 2].map((a) => (max[a] - min[a]) / 2);
+  const inner = half.map((h) => Math.max(0, h - radius));
+  const fadeLength = radius * taper;
+
+  const d = [0, 0, 0];
+  const q = [0, 0, 0];
+  for (let i = 0; i < count; i++) {
+    let outside = 0;
+    let len2 = 0;
+    let ownEdge = true;
+    let distToCorner2 = 0;
+    for (let a = 0; a < 3; a++) {
+      const p = source[i * 3 + a] - center[a];
+      q[a] = Math.max(-inner[a], Math.min(inner[a], p));
+      d[a] = p - q[a];
+      if (Math.abs(d[a]) > 1e-6) {
+        outside++;
+        if (Math.sign(d[a]) !== corner[a]) ownEdge = false;
+      }
+      len2 += d[a] * d[a];
+      const toCorner = p - corner[a] * half[a];
+      distToCorner2 += toCorner * toCorner;
+    }
+    // Only this corner's own edge/corner regions (≥2 axes outside, all on the corner's side).
+    if (outside < 2 || !ownEdge || len2 < 1e-12) continue;
+    const t = Math.max(0, 1 - Math.sqrt(distToCorner2) / fadeLength);
+    if (t <= 0) continue;
+    const w = t * t * (3 - 2 * t); // smoothstep fade along the edges
+    const s = radius / Math.sqrt(len2);
+    for (let a = 0; a < 3; a++) {
+      const rounded = center[a] + q[a] + d[a] * s;
+      out[i * 3 + a] = source[i * 3 + a] + (rounded - source[i * 3 + a]) * w;
+    }
+  }
+}

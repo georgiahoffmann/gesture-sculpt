@@ -41,7 +41,8 @@ export class HandPoseDetector {
       // Dropping to NONE uses the longer release window (bridges noisy/occluded frames); moving to
       // another pose uses that pose's own confirm window, so e.g. a blade flowing into a beak hands
       // off as fast as the beak would have engaged from rest.
-      const needed = state.pose !== 'NONE' && raw === 'NONE' ? cfg.releaseFrames : confirmFramesFor(raw);
+      const releaseFrames = state.pose === 'VERTICAL' || state.pose === 'HORIZONTAL' ? cfg.rotationReleaseFrames : cfg.releaseFrames;
+      const needed = state.pose !== 'NONE' && raw === 'NONE' ? releaseFrames : confirmFramesFor(raw);
       if (state.candidateFrames >= needed) {
         state.pose = raw;
         state.candidateFrames = 0;
@@ -72,6 +73,8 @@ function confirmFramesFor(pose: HandPose): number {
       return cfg.sideConfirmFrames;
     case 'CURLED':
       return cfg.curledConfirmFrames;
+    case 'TRIPOD':
+      return cfg.tripodConfirmFrames;
     case 'HORIZONTAL':
       return cfg.horizontalConfirmFrames;
     default:

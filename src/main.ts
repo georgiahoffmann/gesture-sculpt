@@ -8,13 +8,13 @@ import { InteractionStateMachine, type InteractionMode } from './interaction/int
 import { TransformEngine } from './interaction/transformEngine';
 import { classifyZone } from './interaction/spatialContext';
 import { GestureClassifier, type HandGesture } from './gestures/gestureClassifier';
-import { RotationDetector, PalmYawDetector } from './gestures/rotationDetector';
+import { RotationDetector, PalmYawDetector, DirectionalRatchet } from './gestures/rotationDetector';
 import { HandPoseDetector } from './gestures/handPoseDetector';
 import type { HandPose } from './tracking/landmarkUtils';
 import { BladeTool } from './interaction/bladeTool';
 import { CurlTool } from './interaction/curlTool';
 import { TwoHandRound } from './gestures/twoHandRound';
-import { roundedBoxPositions, smallestHalfExtent } from './sculpt/rounding';
+import { roundedBoxPositions, roundCornerPositions, smallestHalfExtent } from './sculpt/rounding';
 import { cutObject, isCutPiece, setCutPieceSculptMode } from './sculpt/meshCutter';
 import { StrokeDeformer, type StrokeUpdateResult } from './sculpt/strokeDeformer';
 import { MeshDeformer } from './sculpt/meshDeformer';
@@ -64,12 +64,15 @@ interface PointerRuntime {
   rotationDetector: RotationDetector;
   /** Vertical-blade rotation (palm turning around its own vertical axis) — used instead of rotationDetector when ROTATING was engaged by a blade, not a pinch. */
   palmYawDetector: PalmYawDetector;
+  palmYawRatchet: DirectionalRatchet;
   /** HORIZONTAL blade multi-tool: cut / round corners / tilt view. */
   bladeTool: BladeTool;
   /** CURLED pinch multi-tool: zoom in / zoom out / push in. */
   curlTool: CurlTool;
   /** Undo step for an in-progress ROUND CORNERS (recomputed from its before-snapshot every frame). */
   cornerEdit: MeshEditCommand | null;
+  /** Which bounding-box corner (sign of x, y, z) this ROUND CORNERS gesture rounds. */
+  corner: [number, number, number];
   /** Has the engaged pose tool changed anything yet? Gates the pose handoff in the state machine. */
   toolDirty: boolean;
   /** Last frame this pointer was tracked — for the blade tracking-grace window. */
@@ -117,9 +120,11 @@ function main(): void {
         widthManipulator: new WidthManipulator(),
         rotationDetector: new RotationDetector(),
         palmYawDetector: new PalmYawDetector(),
+        palmYawRatchet: new DirectionalRatchet(),
         bladeTool: new BladeTool(),
         curlTool: new CurlTool(),
         cornerEdit: null,
+        corner: [1, 1, 1],
         toolDirty: false,
         lastSeenMs: 0,
         rotationBaselineY: 0,
@@ -228,7 +233,7 @@ function main(): void {
     },
     onHeightManualDelta: (deltaWorld) => {
       const before = deformer.snapshotPositions();
-      deformer.applyHeightDelta(object.topology.heightFraction, deltaWorld);
+      applyWithinView(() => deformer.applyHeightDelta(object.topology.heightFraction, deltaWorld), cameraRig.getCamera());
       deformer.finalizeFrame();
       const cmd = new MeshEditCommand(deformer, before);
       cmd.captureAfter();
@@ -412,6 +417,132 @@ function main(): void {
     return centerNdc.set(ndc.x, ndc.y);
   }
 
+  /**
+   * ROUND CORNERS rounds ONE corner: the bounding-box corner whose screen position is closest to
+   * where the palm was when the gesture locked. The corner farthest from the camera is hidden
+   * behind the object, so it's never picked.
+   */
+  function pickCorner(positions: Float32Array, palmNdc: THREE.Vector2, camera: THREE.Camera): [number, number, number] {
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < positions.length; i += 3) {
+      for (let a = 0; a < 3; a++) {
+        min[a] = Math.min(min[a], positions[i + a]);
+        max[a] = Math.max(max[a], positions[i + a]);
+      }
+    }
+    const candidates: Array<{ sign: [number, number, number]; ndc: THREE.Vector3; depth: number }> = [];
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          const world = object.shadeMesh.localToWorld(new THREE.Vector3(sx > 0 ? max[0] : min[0], sy > 0 ? max[1] : min[1], sz > 0 ? max[2] : min[2]));
+          candidates.push({ sign: [sx, sy, sz], ndc: world.clone().project(camera), depth: world.distanceTo(camera.position) });
+        }
+      }
+    }
+    candidates.sort((a, b) => b.depth - a.depth);
+    const visible = candidates.slice(1);
+    visible.sort((a, b) => Math.hypot(a.ndc.x - palmNdc.x, a.ndc.y - palmNdc.y) - Math.hypot(b.ndc.x - palmNdc.x, b.ndc.y - palmNdc.y));
+    return visible[0].sign;
+  }
+
+  /**
+   * Largest |x| or |y| (normalized screen space) of any point of the form, cut pieces included.
+   * 1 = touching the viewport edge.
+   */
+  const projected = new THREE.Vector3();
+  function viewExtent(camera: THREE.Camera): number {
+    object.group.updateMatrixWorld(true);
+    const meshes: THREE.Mesh[] = [object.shadeMesh];
+    for (const child of object.group.children) {
+      if (isCutPiece(child)) meshes.push((child.userData.cutPiece as { shade: THREE.Mesh }).shade);
+    }
+    let extent = 0;
+    for (const mesh of meshes) {
+      const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < position.count; i++) {
+        projected.fromBufferAttribute(position, i).applyMatrix4(mesh.matrixWorld).project(camera);
+        extent = Math.max(extent, Math.abs(projected.x), Math.abs(projected.y));
+      }
+    }
+    return extent;
+  }
+
+  /**
+   * Runs a growing edit (height/width) and undoes it if it pushed the form past
+   * `view.maxExtentNdc` — the whole form must stay on screen. An edit that doesn't make things
+   * worse (e.g. shrinking while the user is zoomed in close) is always allowed. Returns whether
+   * the edit was kept.
+   */
+  function applyWithinView(apply: () => void, camera: THREE.Camera): boolean {
+    const before = deformer.snapshotPositions();
+    const extentBefore = viewExtent(camera);
+    apply();
+    const extentAfter = viewExtent(camera);
+    if (extentAfter > INTERACTION_CONFIG.view.maxExtentNdc && extentAfter > extentBefore) {
+      deformer.restorePositions(before);
+      return false;
+    }
+    return true;
+  }
+
+  let selectionWeights = new Float32Array(0);
+
+  /**
+   * Lime-green selection feedback on the vertex dots: which points the current gesture acts on
+   * (brush influence for pinch/grip/push, height fraction for height, distance from the axis for
+   * width, the moved region for corner rounding). Rotating/tilting and two-hand rounding act on
+   * the whole form — every point (and so the whole wireframe) goes green. Returns whether it did.
+   */
+  function updateSelectionHighlight(results: Array<{ id: PointerId; mode: InteractionMode }>, rounding: boolean): boolean {
+    const position = object.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const count = position.count;
+    if (selectionWeights.length !== count) selectionWeights = new Float32Array(count);
+    const w = selectionWeights;
+    w.fill(0);
+    let wholeForm = rounding;
+
+    for (const r of results) {
+      const runtime = pointerRuntimes.get(r.id)!;
+      switch (r.mode) {
+        case 'SCULPTING':
+        case 'CURL_TOOL':
+          for (const { index, weight } of runtime.strokeDeformer.getLastInfluence()) w[index] = Math.max(w[index], weight);
+          break;
+        case 'HEIGHT_EDIT': {
+          const hf = object.topology.heightFraction;
+          for (let i = 0; i < count; i++) w[i] = Math.max(w[i], hf[i] ?? 0);
+          break;
+        }
+        case 'WIDTH_EDIT': {
+          let maxR = 1e-6;
+          for (let i = 0; i < count; i++) maxR = Math.max(maxR, Math.hypot(position.getX(i), position.getZ(i)));
+          for (let i = 0; i < count; i++) w[i] = Math.max(w[i], Math.hypot(position.getX(i), position.getZ(i)) / maxR);
+          break;
+        }
+        case 'ROTATING':
+          wholeForm = true;
+          break;
+        case 'BLADE_TOOL':
+          if (runtime.bladeTool.subTool === 'TILT') wholeForm = true;
+          if (runtime.cornerEdit) {
+            const before = runtime.cornerEdit.beforePositions;
+            const now = position.array as Float32Array;
+            for (let i = 0; i < count; i++) {
+              const moved = Math.hypot(now[i * 3] - before[i * 3], now[i * 3 + 1] - before[i * 3 + 1], now[i * 3 + 2] - before[i * 3 + 2]);
+              if (moved > 1e-4) w[i] = 1;
+            }
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    if (wholeForm) w.fill(1);
+    updateVertexHighlight(object.points.geometry, w);
+    return wholeForm;
+  }
+
   interface FrameResult {
     id: PointerId;
     hand: HandState | null;
@@ -505,7 +636,7 @@ function main(): void {
         // Exception: a pinch that has ALREADY engaged is kept alive until the pose confirms, so the
         // state machine can hand it off — dropping it first would release into a cooldown and the
         // pose could never engage (seen on the zoom-in reference: pinch fires 1 frame before CURLED).
-        const pinchLike: HandPose[] = ['DOWN', 'SIDE', 'CURLED'];
+        const pinchLike: HandPose[] = ['DOWN', 'SIDE', 'CURLED', 'TRIPOD'];
         const keepPinch = runtime.stateMachine.engagedByPinch && !pinchLike.includes(confirmedBlade);
         if (!keepPinch && (pinchLike.includes(hand!.pose) || pinchLike.includes(confirmedBlade))) gesture = 'NONE';
         // Two flat hands = the two-hand ROUND gesture; neither hand may start its own tool meanwhile.
@@ -552,8 +683,7 @@ function main(): void {
           break;
         case 'HEIGHT_EDIT': {
           const dy = runtime.heightManipulator.update(cursorNdc);
-          if (dy !== 0) {
-            deformer.applyHeightDelta(object.topology.heightFraction, dy);
+          if (dy !== 0 && applyWithinView(() => deformer.applyHeightDelta(object.topology.heightFraction, dy), camera)) {
             hasSculpted = true;
             runtime.toolDirty = true;
           }
@@ -562,8 +692,7 @@ function main(): void {
         case 'WIDTH_EDIT': {
           if (centerNdcThisFrame) {
             const dw = runtime.widthManipulator.update(cursorNdc, centerNdcThisFrame);
-            if (dw !== 0) {
-              deformer.applyWidthDelta(dw);
+            if (dw !== 0 && applyWithinView(() => deformer.applyWidthDelta(dw), camera)) {
               hasSculpted = true;
               runtime.toolDirty = true;
             }
@@ -573,9 +702,10 @@ function main(): void {
         case 'ROTATING': {
           const rot = INTERACTION_CONFIG.rotation;
           if (runtime.stateMachine.engageSource === 'BLADE') {
-            const delta = runtime.palmYawDetector.delta(hand!);
-            if (Math.abs(delta) > rot.palmYawDeadZone) {
-              transformEngine.setRotationY(runtime.rotationBaselineY + delta * rot.palmYawSensitivity);
+            // Ratchet: keeps turning the object for as long as the palm keeps turning, return strokes ignored.
+            const total = runtime.palmYawRatchet.update(runtime.palmYawDetector.delta(hand!), rot.ratchetBand, rot.palmYawDeadZone);
+            if (total !== 0) {
+              transformEngine.setRotationY(runtime.rotationBaselineY + total * rot.palmYawSensitivity);
               runtime.toolDirty = true;
             }
           } else {
@@ -600,10 +730,19 @@ function main(): void {
           if (blade.cornerAmount != null) {
             // Recomputed from the before-snapshot every frame (absolute, not additive), so raising
             // and lowering the fingers grows and shrinks the fillets without drift.
-            runtime.cornerEdit ??= new MeshEditCommand(deformer, deformer.snapshotPositions());
+            if (!runtime.cornerEdit) {
+              runtime.cornerEdit = new MeshEditCommand(deformer, deformer.snapshotPositions());
+              runtime.corner = pickCorner(runtime.cornerEdit.beforePositions, runtime.bladeTool.cornerAnchor ?? palmNdc, camera);
+            }
             const before = runtime.cornerEdit.beforePositions;
             const radius = blade.cornerAmount * INTERACTION_CONFIG.bladeTool.cornerMaxRadiusFraction * smallestHalfExtent(before);
-            roundedBoxPositions(before, object.geometry.getAttribute('position').array as Float32Array, radius);
+            roundCornerPositions(
+              before,
+              object.geometry.getAttribute('position').array as Float32Array,
+              radius,
+              runtime.corner,
+              INTERACTION_CONFIG.bladeTool.cornerEdgeTaper
+            );
             object.geometry.getAttribute('position').needsUpdate = true;
             if (radius > 0) {
               runtime.toolDirty = true;
@@ -687,10 +826,7 @@ function main(): void {
 
     if (!formFrozen) {
       deformer.finalizeFrame();
-      const influenceSets = results
-        .filter((r) => r.mode === 'SCULPTING')
-        .map((r) => pointerRuntimes.get(r.id)!.strokeDeformer.getLastInfluence());
-      updateVertexHighlight(object.points.geometry, influenceSets);
+      updateSelectionHighlight(results, roundFrame.active);
     }
 
     const pointerVisuals: PointerVisual[] = results.map((r) => {
@@ -832,13 +968,16 @@ function main(): void {
       recorder.beginEpisode(id, mode, nowMs);
     }
     if (mode === 'CURL_TOOL' && hand && cursorNdc) {
-      runtime.curlTool.begin(hand, cursorNdc, centerNdc);
+      runtime.curlTool.begin(hand, cursorNdc, centerNdc, runtime.stateMachine.engagedPose);
       // Opens an undo step; a zoom-only gesture changes no vertices, so endStroke pushes nothing.
       runtime.strokeDeformer.beginStroke();
       recorder.beginEpisode(id, mode, nowMs);
     }
     if (mode === 'ROTATING' && hand && currentRotationY != null) {
-      if (runtime.stateMachine.engageSource === 'BLADE') runtime.palmYawDetector.begin(hand);
+      if (runtime.stateMachine.engageSource === 'BLADE') {
+        runtime.palmYawDetector.begin(hand);
+        runtime.palmYawRatchet.reset(0);
+      }
       else runtime.rotationDetector.begin(hand);
       runtime.rotationBaselineY = currentRotationY;
       recorder.beginEpisode(id, mode, nowMs);
