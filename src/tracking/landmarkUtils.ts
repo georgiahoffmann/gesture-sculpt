@@ -68,7 +68,7 @@ export function isHandHorizontal(landmarks: Point3D[]): boolean {
   return Math.abs(middleMcp.x - wrist.x) > Math.abs(middleMcp.y - wrist.y);
 }
 
-export type HandPose = 'NONE' | 'HORIZONTAL' | 'VERTICAL' | 'DOWN' | 'SIDE' | 'CURLED';
+export type HandPose = 'NONE' | 'HORIZONTAL' | 'VERTICAL' | 'DOWN' | 'SIDE' | 'CURLED' | 'TRIPOD';
 
 export interface PoseThresholds {
   extendRatio: number;
@@ -80,6 +80,7 @@ export interface PoseThresholds {
   orientationDominance: number;
   curledIndexMin: number;
   curledOthersMax: number;
+  tripodMiddleMin: number;
 }
 
 /** wrist->tip / wrist->PIP per finger (index, middle, ring, pinky): >1 extended, <1 curled. Rotation-invariant (3D). */
@@ -97,6 +98,12 @@ export function knuckleWidth3D(landmarks: Point3D[]): number {
 /** Thumb-tip-to-index-tip distance / knuckle width (3D): ~0.1-0.4 pinched, ~2-2.6 in a wide "L". */
 export function thumbIndexGapOf(landmarks: Point3D[]): number {
   return distance3D(landmarks[LM.THUMB_TIP], landmarks[LM.INDEX_TIP]) / knuckleWidth3D(landmarks);
+}
+
+/** Thumb tip to the midpoint of index + middle tips / knuckle width — the TRIPOD (zoom out) pinch's open/close signal. */
+export function tripodGapOf(landmarks: Point3D[]): number {
+  const kw = knuckleWidth3D(landmarks);
+  return (distance3D(landmarks[LM.THUMB_TIP], landmarks[LM.INDEX_TIP]) + distance3D(landmarks[LM.THUMB_TIP], landmarks[LM.MIDDLE_TIP])) / (2 * kw);
 }
 
 /** Average knuckle->tip direction of the four fingers, as an elevation angle in image space: 0 = sideways, +90° = up, -90° = down. */
@@ -145,7 +152,8 @@ export function isFlatHand(landmarks: Point3D[], extendRatio: number, togetherRa
  * Hand poses from the recorded reference gestures (gestures-ref/). Each one
  * engages a tool on its own, with no pinch (see InteractionStateMachine):
  *
- *   CURLED     index + thumb, other three fingers curled into the palm  = zoom / push-in
+ *   TRIPOD     thumb + index + middle, ring and pinky curled            = zoom out
+ *   CURLED     index + thumb, other three fingers curled into the palm  = zoom in / push-in
  *   DOWN       flat, fingers hanging down ("beak", thumb on the tips)    = pull height
  *   SIDE       flat, fingers sideways, thumb ON the fingertips          = pull width
  *   HORIZONTAL flat, fingers sideways, thumb away (palm-down blade)     = cut / round corners / tilt view
@@ -159,6 +167,8 @@ export function isFlatHand(landmarks: Point3D[], extendRatio: number, togetherRa
  */
 export function handPoseOf(landmarks: Point3D[], t: PoseThresholds): HandPose {
   const [index, middle, ring, pinky] = fingerExtensions(landmarks);
+  // Three-finger pinch (thumb + index + middle), ring and pinky curled — the zoom-out gesture.
+  if (index >= t.curledIndexMin && middle >= t.tripodMiddleMin && ring <= t.curledOthersMax && pinky <= t.curledOthersMax) return 'TRIPOD';
   if (index >= t.curledIndexMin && middle <= t.curledOthersMax && ring <= t.curledOthersMax && pinky <= t.curledOthersMax) return 'CURLED';
 
   if (!isFlatHand(landmarks, t.extendRatio, t.togetherRatio)) return 'NONE';

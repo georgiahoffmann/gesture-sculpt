@@ -67,8 +67,27 @@ first motion picks the tool, and it stays locked until release.
 | `SIDE` | flat, fingers sideways (≤20°), thumb on the tips | `WIDTH_EDIT` |
 | `VERTICAL` | flat, fingers up, thumb away | `ROTATING` (palm yaw) |
 | `HORIZONTAL` | flat, fingers sideways, thumb away | `BLADE_TOOL`: sweep sideways = **cut**, fingers arc up to vertical = **round corners**, palm rocks with the palm facing the camera = **tilt the view** |
-| `CURLED` | index + thumb, other three fingers curled | `CURL_TOOL`: starts open and closes = **zoom out**, starts closed and opens = **zoom in** (both are a ratchet), closed and moving toward the object = **push vertices in** |
+| `CURLED` | index + thumb, other three fingers curled | `CURL_TOOL`: opening = **zoom in** (ratchet), closed and moving toward the object = **push vertices in** |
+| `TRIPOD` | thumb + index + middle, ring and pinky curled | `CURL_TOOL`: each closing = **zoom out** (ratchet) |
 | two hands flat | both hands flat and cupped around the object | **round the whole form**. Roundness follows how far the hands trace around it. |
+
+**Continuous rotation**: palm-yaw rotation and view tilt are ratchets
+(`DirectionalRatchet`). The first turn picks the direction, every turn that
+way adds up, and the return strokes are ignored. The object keeps turning
+for as long as the hand keeps turning, instead of stopping at the ~180° a
+wrist can reach. Replaying the rotate reference accumulated 323°. The
+VERTICAL and HORIZONTAL poses also hold through longer occlusions
+(`blade.rotationReleaseFrames`).
+
+**Stays on screen**: height and width edits (gesture or slider) are
+reverted for any frame that would push the form, cut pieces included,
+past `view.maxExtentNdc` of the viewport. Shrinking is always allowed.
+
+**Selection highlight**: the wireframe and vertex dots turn lime green
+(#39ff14) where the current gesture acts. That means the brush falloff for
+pinch, grip and push, the height fraction for height, the distance from
+the axis for width, and the moved region for a corner. Rotating, tilting
+and two-hand rounding turn the whole form green.
 
 Handoff: while an engaged tool hasn't changed anything yet, or within
 `blade.handoffWindowMs` of engaging, a newly confirmed different pose takes
@@ -110,11 +129,11 @@ gesture should collapse into one row once the mapping is confirmed).
 | Flat hand, fingers together and pointing down ("beak", thumb on the fingertips), raised above the head and pulled up | any | `HEIGHT_EDIT` (DOWN pose) | Object grows taller from the base. | Reference: `Movie on 24-09-26 at 08.57 #2.mov`. Used to land in WIDTH: the bent wrist makes wrist→knuckle read horizontal, and the pinch distance flickered 0.16–0.97 mid-pull. Now a pose of its own, confirmed across the whole recorded pull. |
 | Flat upright hand, fingers together, turning around its vertical axis (palm → edge → back of hand) | any | `ROTATING` (VERTICAL blade) | Object turns around Y with the palm. | Reference: `Movie on 24-09-26 at 08.57 #3.mov`. Accumulates frame-to-frame yaw, so turns past 180° don't wrap. The ~0.4s edge-on stretch (ring/pinky occluded) is bridged by `blade.releaseFrames`. Direction untested live: flip `rotation.palmYawSensitivity` if it feels mirrored. |
 | Side "beak" (fingers together pointing sideways, thumb on the tips) pulled away from the object | any | `WIDTH_EDIT` (SIDE) | Object gets wider. | Reference: `09.55.mov`. Starts as a blade for a few frames and hands off. |
-| Flat palm-down hand above the object arcing down to vertical at its side (tracing a rounded corner) | any | `BLADE_TOOL` → ROUND CORNERS | Edges and corners get fillets; radius follows how far the fingers rose (peak is kept). Undoable. | Reference: `09.55 #2.mov` (elevation 8°→83°). |
+| Flat palm-down hand above the object arcing down to vertical at its side (tracing a rounded corner) | any | `BLADE_TOOL` → ROUND CORNERS | Rounds ONE corner: the one nearest the palm on screen when the gesture locks (never the hidden back corner). The fillet fades out along its three edges. The radius follows how far the fingers rose, and the peak is kept. Undoable. | Reference: `09.55 #2.mov` (elevation 8°→83°). |
 | Both hands flat and cupped, tracing around the object | any | two-hand ROUND | Form rounds toward a sphere (a capsule if it's tall). Undoable. | Reference: `09.55 #3.mov`. |
 | Flat sideways hand, palm facing the camera, rocking up/down in place | any | `BLADE_TOOL` → TILT | View orbits up/down to show the top/bottom faces. | Reference: `09.56.mov`. Sign untested live: flip `bladeTool.tiltSensitivity` if it feels inverted. |
 | Curled pinch opening into an "L" (repeated) | any | `CURL_TOOL` → ZOOM IN | Camera moves closer on each opening. | Reference: `09.57.mov`. |
-| "L" closing into a curled pinch (repeated) | any | `CURL_TOOL` → ZOOM OUT | Camera moves away on each closing. | Reference: `09.57 #2.mov`. |
+| Three-finger "V" (thumb, index, middle) closing into a three-finger pinch (repeated) | any | `CURL_TOOL` (TRIPOD) → ZOOM OUT | Camera moves away on each closing. | Reference: `10.45.mov`. Replaces the earlier two-finger zoom out (`09.57 #2.mov`, deleted). |
 | Closed curled pinch moving toward the object | MESH under the cursor | `CURL_TOOL` → PUSH | Vertices under the brush are pushed back into the form. Undoable. | Reference: `09.57 #3.mov`. |
 | Flat horizontal hand, palm down, fingers together, swept across the object | any | `BLADE_TOOL` → CUT | Object splits along the hand's path. The lower piece stays sculptable and the upper one is lifted off as a separate piece. Undoable. | Reference: `Movie on 24-09-26 at 08.57.mov`. See **Cut** below. |
 

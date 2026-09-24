@@ -1,35 +1,25 @@
 import * as THREE from 'three';
-import type { BrushInfluence } from '../sculpt/sculptBrush';
 
-const BASE = 0.1;
-const HIGHLIGHT = 0.95;
+const BASE_COLOR = new THREE.Color(0x1a1a1a);
+const BASE: [number, number, number] = [BASE_COLOR.r, BASE_COLOR.g, BASE_COLOR.b];
+/** The app's lime green (--accent-green, #39ff14) — the one selection color. THREE.Color converts the hex to the linear space vertex colors use. */
+export const SELECTION_GREEN_COLOR = new THREE.Color(0x39ff14);
+const SELECTION_GREEN: [number, number, number] = [SELECTION_GREEN_COLOR.r, SELECTION_GREEN_COLOR.g, SELECTION_GREEN_COLOR.b];
 
 /**
- * Temporarily brightens the vertex dots currently under a brush, so the
- * user can see exactly which points are about to move — monochrome
- * (brightness only, no color coding), matching the rest of the UI.
+ * Colors the vertex dots — and, through the shared color attribute, the
+ * wireframe — by selection weight (0..1 per vertex): 0 stays
+ * the base dark gray, 1 is full lime green, in between blends — so the
+ * user sees exactly which points the current gesture is acting on, and how
+ * strongly (brush falloff, height fraction, ...).
  */
-export function updateVertexHighlight(pointsGeometry: THREE.BufferGeometry, influenceSets: BrushInfluence[][]): void {
+export function updateVertexHighlight(pointsGeometry: THREE.BufferGeometry, weights: Float32Array): void {
   const color = pointsGeometry.getAttribute('color') as THREE.BufferAttribute;
   const array = color.array as Float32Array;
-  const count = color.count;
-
-  for (let i = 0; i < count; i++) {
-    array[i * 3] = BASE;
-    array[i * 3 + 1] = BASE;
-    array[i * 3 + 2] = BASE;
+  const count = Math.min(color.count, weights.length);
+  for (let i = 0; i < color.count; i++) {
+    const w = i < count ? Math.min(1, Math.max(0, weights[i])) : 0;
+    for (let c = 0; c < 3; c++) array[i * 3 + c] = BASE[c] + (SELECTION_GREEN[c] - BASE[c]) * w;
   }
-
-  for (const influences of influenceSets) {
-    for (const { index, weight } of influences) {
-      const v = BASE + weight * (HIGHLIGHT - BASE);
-      if (v > array[index * 3]) {
-        array[index * 3] = v;
-        array[index * 3 + 1] = v;
-        array[index * 3 + 2] = v;
-      }
-    }
-  }
-
   color.needsUpdate = true;
 }

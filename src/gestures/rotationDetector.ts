@@ -81,3 +81,44 @@ export class PalmYawDetector {
     this.accumulated = 0;
   }
 }
+
+/**
+ * Turns a back-and-forth hand motion into CONTINUOUS one-way output, for as
+ * long as the gesture lasts: the first move past `lockThreshold` picks the
+ * direction; after that, every move in that direction adds up and every
+ * move back (the hand returning to turn again) is ignored. A wrist can only
+ * turn ~180°, so a 1:1 mapping could only ever rotate "a bit at a time" —
+ * each return stroke undid the turn. Same idea as the zoom ratchet.
+ */
+export class DirectionalRatchet {
+  private anchor = 0;
+  private direction = 0;
+  private total = 0;
+
+  reset(value: number): void {
+    this.anchor = value;
+    this.direction = 0;
+    this.total = 0;
+  }
+
+  /** Feed the current (unwrapped) value; returns the accumulated one-way output since reset. */
+  update(value: number, band: number, lockThreshold: number): number {
+    const d = value - this.anchor;
+    if (this.direction === 0) {
+      if (Math.abs(d) > lockThreshold) {
+        this.direction = Math.sign(d);
+        this.total += d;
+        this.anchor = value;
+      }
+      return this.total;
+    }
+    if (d * this.direction > band) {
+      this.total += d;
+      this.anchor = value;
+    } else if (d * this.direction < 0) {
+      // Return stroke: follow the hand back without output.
+      this.anchor = value;
+    }
+    return this.total;
+  }
+}

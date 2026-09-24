@@ -50,6 +50,8 @@ export interface HandState {
   palmPitch: number;
   /** Thumb-tip-to-index-tip / knuckle width (3D). The zoom gesture opens and closes this. */
   thumbIndexGap: number;
+  /** Thumb tip to the index+middle tips / knuckle width (3D). The zoom-out TRIPOD opens and closes this. */
+  tripodGap: number;
   /** Index + thumb tips hang below the knuckles — the "pull from above" HEIGHT pose, see landmarkUtils.isPointingDown. */
   pointingDown: boolean;
 }
