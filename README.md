@@ -75,3 +75,7 @@ Thresholds were tuned by replaying recorded reference videos through the real pi
 ## Deployment
 
 Pushes to `main` deploy to production on Vercel automatically.
+
+## License
+
+[MIT](LICENSE) © Georgia Hoffmann
