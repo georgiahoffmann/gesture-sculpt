@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "description": "Hand-tracked 3D sculpting in the browser — shape a mesh with webcam gestures (Vite + TypeScript + Three.js + MediaPipe Tasks Vision).",
+  "license": "MIT",
+  "author": "Georgia Hoffmann",
   "type": "module",
   "repository": {
     "type": "git",
